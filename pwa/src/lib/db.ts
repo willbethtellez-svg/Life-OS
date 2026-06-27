@@ -1,9 +1,9 @@
 import { openDB, type IDBPDatabase } from 'idb';
 
 const DB_NAME = 'lifeos';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-type StoreName = 'pendingTransactions' | 'exchangeRates' | 'householdTasks' | 'maintenanceLogs' | 'vehicleRecords' | 'babyRecords' | 'syncQueue';
+type StoreName = 'pendingTransactions' | 'exchangeRates' | 'householdTasks' | 'maintenanceLogs' | 'vehicleRecords' | 'babyRecords' | 'syncQueue' | 'accountAcquisition';
 
 interface SyncQueueItem {
   id?: number;
@@ -14,12 +14,19 @@ interface SyncQueueItem {
   retries: number;
 }
 
+export interface AccountAcquisition {
+  accountId: string;
+  averageRate: number;
+  notes: string;
+  updatedAt: string;
+}
+
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
 function getDb() {
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion) {
         if (!db.objectStoreNames.contains('pendingTransactions')) {
           const store = db.createObjectStore('pendingTransactions', { keyPath: 'id' });
           store.createIndex('confirmed', 'confirmed');
@@ -43,10 +50,10 @@ function getDb() {
           db.createObjectStore('babyRecords', { keyPath: 'id' });
         }
         if (!db.objectStoreNames.contains('syncQueue')) {
-          db.createObjectStore('syncQueue', {
-            keyPath: 'id',
-            autoIncrement: true,
-          });
+          db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
+        }
+        if (!db.objectStoreNames.contains('accountAcquisition')) {
+          db.createObjectStore('accountAcquisition', { keyPath: 'accountId' });
         }
       },
     });
@@ -136,5 +143,11 @@ export const localDB = {
     },
     remove: (id: number) => del('syncQueue', id),
     clear: () => clear('syncQueue'),
+  },
+  accountAcquisition: {
+    getAll: () => getAll<AccountAcquisition>('accountAcquisition'),
+    get: (id: string) => get<AccountAcquisition>('accountAcquisition', id),
+    set: (acq: AccountAcquisition) => set('accountAcquisition', acq.accountId, acq),
+    delete: (id: string) => del('accountAcquisition', id),
   },
 };

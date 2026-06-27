@@ -10,6 +10,7 @@ const navItems = [
   { href: '/transactions', label: 'Transacciones', icon: '↔' },
   { href: '/accounts', label: 'Cuentas', icon: '♢' },
   { href: '/jars', label: 'Jarras', icon: '⚱' },
+  { href: '/reconciliation', label: 'Conciliación', icon: '≋' },
   { href: '/categories', label: 'Categorías', icon: '⊞' },
   { href: '/loans', label: 'Préstamos', icon: '⊡' },
   { href: '/rates', label: 'Tasas', icon: '⟳' },
