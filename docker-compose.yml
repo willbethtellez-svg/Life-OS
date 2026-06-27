@@ -1,0 +1,61 @@
+version: '3.9'
+
+services:
+  firefly-db:
+    image: postgres:16-alpine
+    container_name: lifeos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: firefly
+      POSTGRES_USER: firefly
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-supersecret}
+    volumes:
+      - firefly-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U firefly"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  firefly-app:
+    image: fireflyiii/core:latest
+    container_name: lifeos-firefly
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: firefly-db
+      DB_PORT: 5432
+      DB_DATABASE: firefly
+      DB_USERNAME: firefly
+      DB_PASSWORD: ${DB_PASSWORD:-supersecret}
+      APP_KEY: ${APP_KEY:-CHANGE_ME_TO_A_RANDOM_STRING_32CHARS}
+      SITE_OWNER: ${FIREFLY_EMAIL:-admin@lifeos.local}
+      TRUSTED_PROXIES: "**"
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      DEFAULT_CURRENCY: USD
+      DEFAULT_LANGUAGE: es_ES
+      DEFAULT_LOCALE: es_VE
+    volumes:
+      - firefly-upload:/var/www/html/storage/upload
+    depends_on:
+      firefly-db:
+        condition: service_healthy
+
+  firefly-importer:
+    image: fireflyiii/data-importer:latest
+    container_name: lifeos-importer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      FIREFLY_III_URL: ${APP_URL:-http://firefly-app:8080}
+      FIREFLY_III_ACCESS_TOKEN: ${IMPORTER_TOKEN:-}
+      TRUSTED_PROXIES: "**"
+    depends_on:
+      - firefly-app
+
+volumes:
+  firefly-db-data:
+  firefly-upload:
