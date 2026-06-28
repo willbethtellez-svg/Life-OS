@@ -151,6 +151,12 @@ export const db = {
       if (error) throw error;
       return data;
     },
+    create: async (budget: Partial<Budget>): Promise<Budget> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('budgets').insert({ ...budget, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
   },
 
   // ─── PIGGY BANKS ──────────────────────────────────────────
@@ -189,6 +195,16 @@ export const db = {
       const { data, error } = await supabase.from('liabilities').select('*').eq('id', id).single();
       if (error) throw error;
       return data;
+    },
+    create: async (liability: Partial<Liability>): Promise<Liability> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('liabilities').insert({ ...liability, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('liabilities').delete().eq('id', id);
+      if (error) throw error;
     },
   },
 
