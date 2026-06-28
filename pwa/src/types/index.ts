@@ -101,6 +101,9 @@ export interface PendingTransaction {
   type: TransactionType;
   categoryId: string | null;
   categoryName: string | null;
+  fee: number | null;
+  feeCurrency: CurrencyCode | null;
+  feeCategoryId: string | null;
   confirmed: boolean;
   synced: boolean;
   createdAt: string;
