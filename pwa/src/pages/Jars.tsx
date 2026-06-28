@@ -13,6 +13,7 @@ export default function JarsPage() {
   const [form, setForm] = useState({
     name: '',
     targetAmount: '',
+    currentAmount: '',
     currency: 'USD' as CurrencyCode,
     notes: '',
   });
@@ -39,12 +40,12 @@ export default function JarsPage() {
       await db.piggyBanks.create({
         name: form.name.trim(),
         target_amount: parseFloat(form.targetAmount) || 0,
-        current_amount: 0,
+        current_amount: parseFloat(form.currentAmount) || 0,
         currency: form.currency,
         start_date: new Date().toISOString().split('T')[0],
         notes: form.notes,
       });
-      setForm({ name: '', targetAmount: '', currency: 'USD', notes: '' });
+      setForm({ name: '', targetAmount: '', currentAmount: '', currency: 'USD', notes: '' });
       setShowForm(false);
       fetchJars();
     } catch (err: any) {
@@ -100,7 +101,13 @@ export default function JarsPage() {
               className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
               placeholder="Ej. Fondo de emergencia" required />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="block text-xs text-text-muted mb-1">Saldo inicial</label>
+              <input type="number" step="0.01" value={form.currentAmount} onChange={e => setForm(f => ({ ...f, currentAmount: e.target.value }))}
+                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="0.00" />
+            </div>
             <div>
               <label className="block text-xs text-text-muted mb-1">Meta</label>
               <input type="number" step="0.01" value={form.targetAmount} onChange={e => setForm(f => ({ ...f, targetAmount: e.target.value }))}

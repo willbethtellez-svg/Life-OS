@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   source_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
   destination_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
   category_id UUID,
+  piggy_bank_id UUID REFERENCES piggy_banks(id) ON DELETE SET NULL,
   fee NUMERIC(15,2) DEFAULT 0,
   fee_currency TEXT DEFAULT 'USD',
   confirmed BOOLEAN DEFAULT false,

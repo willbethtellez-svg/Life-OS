@@ -11,9 +11,24 @@ import { Link } from "react-router-dom";
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
 
+async function getVesRate(): Promise<number | null> {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const rates = await db.exchangeRates.getByDate(today);
+    const r = rates.find(r => r.from_currency === "USDT" && r.to_currency === "VES")
+      || rates.find(r => r.from_currency === "USD" && r.to_currency === "VES");
+    return r?.rate || null;
+  } catch { return null; }
+}
+
+function toUSD(amount: number, currency: string, vesRate: number | null): number {
+  if (currency === "USD" || currency === "USDT") return amount;
+  if (currency === "VES" && vesRate) return amount / vesRate;
+  return 0;
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
-  const [accounts, setAccounts] = useState<any[]>([]);
   const [recentTxs, setRecentTxs] = useState<any[]>([]);
   const [monthlyIncome, setMonthlyIncome] = useState(0);
   const [monthlyExpense, setMonthlyExpense] = useState(0);
@@ -22,6 +37,7 @@ export default function DashboardPage() {
   const [netWorth, setNetWorth] = useState(0);
   const [period, setPeriod] = useState<"1m" | "3m" | "6m" | "12m">("3m");
   const [error, setError] = useState("");
+  const [vesRate, setVesRate] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -32,21 +48,25 @@ export default function DashboardPage() {
       const start = startOfMonth(subMonths(now, months)).toISOString().split("T")[0];
       const end = endOfMonth(now).toISOString().split("T")[0];
 
+      const rate = await getVesRate();
+      setVesRate(rate);
+
       const accountsList = await db.accounts.list({ type: "asset" });
-      setAccounts(accountsList);
-      setNetWorth(
-        accountsList.reduce((sum: number, a: any) => sum + parseFloat(a.current_balance || "0"), 0)
-      );
+      const nw = accountsList.reduce((sum: number, a: any) => {
+        const bal = parseFloat(a.current_balance || "0");
+        return sum + toUSD(bal, a.currency, rate);
+      }, 0);
+      setNetWorth(nw);
 
       const txList = await db.transactions.list({ start, end, limit: 50 });
       setRecentTxs(txList.slice(0, 20));
 
       const income = txList
         .filter((t: any) => t.type === "deposit")
-        .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
+        .reduce((s: number, t: any) => s + toUSD(Math.abs(parseFloat(t.amount || "0")), t.currency, rate), 0);
       const expense = txList
         .filter((t: any) => t.type === "withdrawal")
-        .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
+        .reduce((s: number, t: any) => s + toUSD(Math.abs(parseFloat(t.amount || "0")), t.currency, rate), 0);
       setMonthlyIncome(income);
       setMonthlyExpense(expense);
 
@@ -55,7 +75,7 @@ export default function DashboardPage() {
         .filter((t: any) => t.type === "withdrawal")
         .forEach((t: any) => {
           const catName = t.category_name || "Sin categoría";
-          cats[catName] = (cats[catName] || 0) + Math.abs(parseFloat(t.amount || "0"));
+          cats[catName] = (cats[catName] || 0) + toUSD(Math.abs(parseFloat(t.amount || "0")), t.currency, rate);
         });
       setCategoryData(
         Object.entries(cats)
@@ -75,10 +95,10 @@ export default function DashboardPage() {
         });
         const mIncome = mTxList
           .filter((t: any) => t.type === "deposit")
-          .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
+          .reduce((s: number, t: any) => s + toUSD(Math.abs(parseFloat(t.amount || "0")), t.currency, rate), 0);
         const mExpense = mTxList
           .filter((t: any) => t.type === "withdrawal")
-          .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
+          .reduce((s: number, t: any) => s + toUSD(Math.abs(parseFloat(t.amount || "0")), t.currency, rate), 0);
         trendData.push({ month: label, income: Math.round(mIncome * 100) / 100, expense: Math.round(mExpense * 100) / 100 });
       }
       setMonthlyTrend(trendData);
@@ -118,6 +138,13 @@ export default function DashboardPage() {
 
       {error && (
         <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>
+      )}
+
+      {vesRate && (
+        <div className="bg-surface rounded-xl px-4 py-2 flex items-center justify-between">
+          <span className="text-xs text-text-muted">Tasa VES/USD</span>
+          <span className="text-sm font-semibold text-primary">1 USD = {vesRate.toFixed(2)} VES</span>
+        </div>
       )}
 
       <div className="grid grid-cols-2 gap-3">
@@ -185,6 +212,9 @@ export default function DashboardPage() {
           {recentTxs.slice(0, 10).map((tx: any) => {
             const amount = parseFloat(tx.amount || "0");
             const isNegative = tx.type === "withdrawal";
+            const currency = tx.currency || "USD";
+            const usdAmount = toUSD(amount, currency, vesRate);
+            const isVES = currency === "VES";
             return (
               <div key={tx.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
                 <div className="flex-1 min-w-0">
@@ -194,9 +224,16 @@ export default function DashboardPage() {
                     {tx.category_name && ` · ${tx.category_name}`}
                   </p>
                 </div>
-                <span className={`text-sm font-semibold ml-3 ${isNegative ? "text-danger" : "text-secondary"}`}>
-                  {isNegative ? "-" : "+"}{formatCurrency(Math.abs(amount))}
-                </span>
+                <div className="text-right ml-3">
+                  <span className={`text-sm font-semibold block ${isNegative ? "text-danger" : "text-secondary"}`}>
+                    {isNegative ? "-" : "+"}{formatCurrency(Math.abs(amount), currency)}
+                  </span>
+                  {isVES && vesRate && (
+                    <span className="text-[10px] text-text-muted block">
+                      ≈ {formatCurrency(usdAmount)}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}

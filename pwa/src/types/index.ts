@@ -26,6 +26,7 @@ export interface Transaction {
   source_account_id: string | null;
   destination_account_id: string | null;
   category_id: string | null;
+  piggy_bank_id: string | null;
   fee: number;
   fee_currency: CurrencyCode | null;
   confirmed: boolean;
@@ -111,9 +112,11 @@ export interface PendingTransaction {
   currency: CurrencyCode;
   accountId: string;
   accountName: string;
+  destinationAccountId?: string;
   type: TransactionType;
   categoryId: string | null;
   categoryName: string | null;
+  piggyBankId?: string | null;
   fee: number | null;
   feeCurrency: CurrencyCode | null;
   feeCategoryId: string | null;

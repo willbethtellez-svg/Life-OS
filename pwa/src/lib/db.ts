@@ -95,13 +95,6 @@ export const db = {
       const user = await getUser();
       const { data, error } = await supabase.from('transactions').insert({ ...tx, user_id: user?.id }).select().single();
       if (error) throw error;
-      // Update account balance
-      if (tx.source_account_id && (tx.type === 'withdrawal' || tx.type === 'transfer')) {
-        await supabase.rpc('decrement_balance', { acc_id: tx.source_account_id, amount: Math.abs(tx.amount || 0) });
-      }
-      if (tx.destination_account_id && (tx.type === 'deposit' || tx.type === 'transfer')) {
-        await supabase.rpc('increment_balance', { acc_id: tx.destination_account_id, amount: Math.abs(tx.amount || 0) });
-      }
       return data;
     },
     update: async (id: string, updates: Partial<Transaction>): Promise<Transaction> => {
