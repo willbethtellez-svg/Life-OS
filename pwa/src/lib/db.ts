@@ -15,7 +15,7 @@ async function toUSD(amount: number, currency: string, date?: string): Promise<n
   if (currency === 'USD' || currency === 'USDT') return amount;
   const txDate = date || new Date().toISOString().split('T')[0];
   const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
-  // Buscar tasa directa (VES → USD) o inversa (USDT/VES → invertir)
+  // Buscar tasa directa (currency → USD) o inversa (USD/USDT → currency)
   let rate = rates?.find(r => r.from_currency === currency && r.to_currency === 'USD')?.rate;
   if (!rate) {
     const inverse = rates?.find(r => r.from_currency === 'USD' && r.to_currency === currency)?.rate
@@ -32,7 +32,7 @@ async function toUSD(amount: number, currency: string, date?: string): Promise<n
     }
   }
   if (!rate) return amount;
-  return amount / rate;
+  return amount * rate;
 }
 
 // Convierte entre dos monedas (para jarras)
