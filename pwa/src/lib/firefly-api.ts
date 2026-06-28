@@ -1,35 +1,11 @@
-const BASE_URL = process.env.NEXT_PUBLIC_FIREFLY_URL || 'http://localhost:8080';
-const TOKEN = process.env.NEXT_PUBLIC_FIREFLY_TOKEN || '';
-
-interface ApiResponse<T> {
-  data: T[];
-  meta?: {
-    pagination: {
-      total: number;
-      count: number;
-      perPage: number;
-      currentPage: number;
-      totalPages: number;
-    };
-  };
-  links?: {
-    first: string;
-    last: string;
-    prev: string | null;
-    next: string | null;
-  };
-}
-
-interface SingleApiResponse<T> {
-  data: T;
-}
-
-async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const url = `${BASE_URL}/api/v1${endpoint}`;
+async function request<T = any>(endpoint: string, options?: RequestInit): Promise<T> {
+  const baseUrl = import.meta.env.VITE_FIREFLY_URL || "http://localhost:8080";
+  const token = import.meta.env.VITE_FIREFLY_TOKEN || "";
+  const url = `${baseUrl}/api/v1${endpoint}`;
   const headers: Record<string, string> = {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json',
-    ...(TOKEN ? { 'Authorization': `Bearer ${TOKEN}` } : {}),
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
   const res = await fetch(url, {
@@ -46,71 +22,65 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 }
 
 function buildQuery(params?: Record<string, string | number | boolean | undefined>): string {
-  if (!params) return '';
+  if (!params) return "";
   const q = Object.entries(params)
-    .filter(([, v]) => v !== undefined && v !== '')
+    .filter(([, v]) => v !== undefined && v !== "")
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join('&');
-  return q ? `?${q}` : '';
+    .join("&");
+  return q ? `?${q}` : "";
 }
 
 export const api = {
   accounts: {
     list: (params?: { page?: number; type?: string }) =>
-      request<import('@/types').Account>(`/accounts${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/accounts${buildQuery(params as any)}`),
     get: (id: string) =>
-      request<import('@/types').Account>(`/accounts/${id}`),
+      request(`/accounts/${id}`),
     transactions: (id: string, params?: { page?: number; limit?: number; start?: string; end?: string }) =>
-      request<import('@/types').Transaction>(`/accounts/${id}/transactions${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/accounts/${id}/transactions${buildQuery(params as any)}`),
   },
   transactions: {
     list: (params?: { page?: number; limit?: number; start?: string; end?: string; type?: string }) =>
-      request<import('@/types').Transaction>(`/transactions${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/transactions${buildQuery(params as any)}`),
     get: (id: string) =>
-      request<import('@/types').Transaction>(`/transactions/${id}`),
+      request(`/transactions/${id}`),
     create: (data: Record<string, unknown>) =>
-      request<import('@/types').Transaction>('/transactions', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }),
+      request("/transactions", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: Record<string, unknown>) =>
-      request<import('@/types').Transaction>(`/transactions/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      }),
+      request(`/transactions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id: string) =>
-      request<void>(`/transactions/${id}`, { method: 'DELETE' }),
+      request(`/transactions/${id}`, { method: "DELETE" }),
   },
   categories: {
     list: (params?: { page?: number }) =>
-      request<import('@/types').Category>(`/categories${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/categories${buildQuery(params as any)}`),
     get: (id: string) =>
-      request<import('@/types').Category>(`/categories/${id}`),
+      request(`/categories/${id}`),
     transactions: (id: string, params?: { page?: number; start?: string; end?: string }) =>
-      request<import('@/types').Transaction>(`/categories/${id}/transactions${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/categories/${id}/transactions${buildQuery(params as any)}`),
   },
   budgets: {
     list: (params?: { page?: number }) =>
-      request<import('@/types').Budget>(`/budgets${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/budgets${buildQuery(params as any)}`),
     get: (id: string) =>
-      request<import('@/types').Budget>(`/budgets/${id}`),
+      request(`/budgets/${id}`),
   },
   piggyBanks: {
     list: (params?: { page?: number }) =>
-      request<import('@/types').PiggyBank>(`/piggy-banks${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/piggy-banks${buildQuery(params as any)}`),
     get: (id: string) =>
-      request<import('@/types').PiggyBank>(`/piggy-banks/${id}`),
+      request(`/piggy-banks/${id}`),
   },
   liabilities: {
     list: (params?: { page?: number }) =>
-      request<import('@/types').Liability>(`/liabilities${buildQuery(params as Record<string, string | number | boolean | undefined>)}`),
+      request(`/liabilities${buildQuery(params as any)}`),
     get: (id: string) =>
-      request<import('@/types').Liability>(`/liabilities/${id}`),
+      request(`/liabilities/${id}`),
   },
   currencies: {
-    list: () => request<{ id: string; code: string; name: string; symbol: string; decimalPlaces: number }[]>('/currencies'),
+    list: () => request("/currencies"),
   },
   summary: {
-    basic: () => request<Record<string, string>>('/summary/basic'),
+    basic: () => request("/summary/basic"),
   },
 };
