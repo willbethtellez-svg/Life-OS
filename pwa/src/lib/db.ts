@@ -126,6 +126,11 @@ export const db = {
       if (error) throw error;
       return data;
     },
+    update: async (id: string, name: string): Promise<Category> => {
+      const { data, error } = await supabase.from('categories').update({ name }).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
     delete: async (id: string): Promise<void> => {
       const { error } = await supabase.from('categories').delete().eq('id', id);
       if (error) throw error;
@@ -137,7 +142,28 @@ export const db = {
     list: async (): Promise<Budget[]> => {
       const { data, error } = await supabase.from('budgets').select('*').order('name');
       if (error) throw error;
-      return data || [];
+      const budgets = data || [];
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+      for (const bud of budgets) {
+        try {
+          const { data: txData } = await supabase.from('transactions')
+            .select('amount, currency')
+            .eq('type', 'withdrawal')
+            .eq('currency', bud.currency)
+            .gte('date', start)
+            .lte('date', end);
+          let spent = 0;
+          for (const tx of txData || []) {
+            spent += parseFloat(tx.amount || '0');
+          }
+          (bud as any).spent = spent;
+        } catch {
+          (bud as any).spent = 0;
+        }
+      }
+      return budgets;
     },
     get: async (id: string): Promise<Budget | null> => {
       const { data, error } = await supabase.from('budgets').select('*').eq('id', id).single();
@@ -149,6 +175,15 @@ export const db = {
       const { data, error } = await supabase.from('budgets').insert({ ...budget, user_id: user?.id }).select().single();
       if (error) throw error;
       return data;
+    },
+    update: async (id: string, updates: Partial<Budget>): Promise<Budget> => {
+      const { data, error } = await supabase.from('budgets').update(updates).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('budgets').delete().eq('id', id);
+      if (error) throw error;
     },
   },
 
@@ -192,6 +227,11 @@ export const db = {
     create: async (liability: Partial<Liability>): Promise<Liability> => {
       const user = await getUser();
       const { data, error } = await supabase.from('liabilities').insert({ ...liability, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    update: async (id: string, updates: Partial<Liability>): Promise<Liability> => {
+      const { data, error } = await supabase.from('liabilities').update(updates).eq('id', id).select().single();
       if (error) throw error;
       return data;
     },

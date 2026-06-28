@@ -17,7 +17,13 @@ async function getVesRate(): Promise<number | null> {
     const rates = await db.exchangeRates.getByDate(today);
     const r = rates.find(r => r.from_currency === "USDT" && r.to_currency === "VES")
       || rates.find(r => r.from_currency === "USD" && r.to_currency === "VES");
-    return r?.rate || null;
+    if (r) return r.rate;
+    // Fallback: most recent rate from any date
+    const allRates = await db.exchangeRates.getAll();
+    const vesRates = allRates
+      .filter(r => (r.from_currency === "USDT" || r.from_currency === "USD") && r.to_currency === "VES")
+      .sort((a, b) => b.date.localeCompare(a.date));
+    return vesRates[0]?.rate || null;
   } catch { return null; }
 }
 

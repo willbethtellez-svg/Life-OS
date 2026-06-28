@@ -48,9 +48,18 @@ export default function ReconciliationPage() {
       setTodayRates(rates);
       setAcquisitions(acqs);
 
-      const vesRate = rates.find(r => r.from_currency === 'USDT' && r.to_currency === 'VES')?.rate
+      let vesRate = rates.find(r => r.from_currency === 'USDT' && r.to_currency === 'VES')?.rate
         || rates.find(r => r.from_currency === 'USD' && r.to_currency === 'VES')?.rate
         || null;
+
+      // Fallback: most recent VES rate from any date
+      if (!vesRate) {
+        const allRates = await db.exchangeRates.getAll();
+        const fallback = allRates
+          .filter(r => (r.from_currency === 'USDT' || r.from_currency === 'USD') && r.to_currency === 'VES')
+          .sort((a, b) => b.date.localeCompare(a.date));
+        vesRate = fallback[0]?.rate || null;
+      }
 
       const parsed: AccountBreakdown[] = accList.map((acc: any) => {
         const currency = acc.currency || 'USD';
