@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format, parseISO } from 'date-fns';
-import { api } from '@/lib/firefly-api';
+import { format } from 'date-fns';
+import { db } from '@/lib/db';
 import { formatCurrency, generateId } from '@/lib/utils';
-import { localDB } from '@/lib/db';
 import type { PendingTransaction, CurrencyCode, TransactionType } from '@/types';
 
 export default function TransactionsPage() {
@@ -32,16 +31,16 @@ export default function TransactionsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [txRes, accRes, catRes, pendingList] = await Promise.all([
-        api.transactions.list({ limit: 50 }),
-        api.accounts.list({ type: 'asset' }),
-        api.categories.list(),
-        localDB.pendingTransactions.getAll(),
+      const [txList, accList, catList, pendingList] = await Promise.all([
+        db.transactions.list({ limit: 50 }),
+        db.accounts.list({ type: 'asset' }),
+        db.categories.list(),
+        db.pendingTransactions.getAll(),
       ]);
 
-      setTransactions(Array.isArray(txRes) ? txRes : txRes.data || []);
-      setAccounts(Array.isArray(accRes) ? accRes : accRes.data || []);
-      setCategories(Array.isArray(catRes) ? catRes : catRes.data || []);
+      setTransactions(txList);
+      setAccounts(accList);
+      setCategories(catList);
       setPending(pendingList);
     } catch (err) {
       setError('Error al cargar transacciones');
@@ -54,19 +53,13 @@ export default function TransactionsPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   function getAccountName(id: string): string {
-    const acc = accounts.find(a => {
-      const aid = a.id || a.attributes?.id;
-      return aid === id;
-    });
-    return acc?.attributes?.name || acc?.name || id;
+    const acc = accounts.find(a => a.id === id);
+    return acc?.name || id;
   }
 
   function getCategoryName(id: string): string | null {
-    const cat = categories.find(c => {
-      const cid = c.id || c.attributes?.id;
-      return cid === id;
-    });
-    return cat?.attributes?.name || cat?.name || null;
+    const cat = categories.find(c => c.id === id);
+    return cat?.name || null;
   }
 
   async function handleQuickSubmit(e: React.FormEvent) {
@@ -109,7 +102,7 @@ export default function TransactionsPage() {
       createdAt: new Date().toISOString(),
     };
 
-    await localDB.pendingTransactions.set(pendingTx);
+    await db.pendingTransactions.set(pendingTx);
     setPending(prev => [pendingTx, ...prev]);
     setForm({
       amount: '', currency: 'VES', description: '', accountId: '',
@@ -127,39 +120,34 @@ export default function TransactionsPage() {
     setError('');
 
     try {
-      const transactionList: Record<string, unknown>[] = [];
-
-      const mainTx: Record<string, unknown> = {
-        type: tx.type === 'withdrawal' ? 'withdrawal' : tx.type === 'deposit' ? 'deposit' : 'transfer',
+      await db.transactions.create({
         date: tx.date,
-        amount: tx.amount.toString(),
         description: tx.description,
-        currency_code: tx.currency,
-        category_id: tx.categoryId || undefined,
-        source_id: tx.type === 'deposit' ? undefined : tx.accountId,
-        source_name: tx.type === 'deposit' ? 'Saldo inicial' : tx.accountName,
-        destination_id: tx.type === 'withdrawal' ? undefined : tx.accountId,
-        destination_name: tx.type === 'withdrawal' ? 'Gasto' : tx.accountName,
-      };
-
-      transactionList.push(mainTx);
+        amount: tx.amount,
+        currency: tx.currency,
+        type: tx.type,
+        source_account_id: tx.type === 'deposit' ? null : tx.accountId,
+        destination_account_id: tx.type === 'withdrawal' ? null : tx.accountId,
+        category_id: tx.categoryId || null,
+        fee: tx.fee || 0,
+        fee_currency: tx.feeCurrency || null,
+        confirmed: true,
+      });
 
       if (tx.fee && tx.fee > 0) {
-        const feeTx: Record<string, unknown> = {
-          type: 'withdrawal',
+        await db.transactions.create({
           date: tx.date,
-          amount: tx.fee.toString(),
           description: `Comisión: ${tx.description}`,
-          currency_code: tx.feeCurrency || tx.currency,
-          category_id: tx.feeCategoryId || undefined,
-          source_id: tx.accountId,
-          source_name: tx.accountName,
-        };
-        transactionList.push(feeTx);
+          amount: tx.fee,
+          currency: tx.feeCurrency || tx.currency,
+          type: 'withdrawal',
+          source_account_id: tx.accountId,
+          category_id: tx.feeCategoryId || null,
+          confirmed: true,
+        });
       }
 
-      await api.transactions.create({ transactions: transactionList });
-      await localDB.pendingTransactions.set({ ...tx, confirmed: true, synced: true });
+      await db.pendingTransactions.delete(id);
       setPending(prev => prev.filter(p => p.id !== id));
       fetchData();
     } catch (err) {
@@ -169,7 +157,7 @@ export default function TransactionsPage() {
   }
 
   async function deletePending(id: string) {
-    await localDB.pendingTransactions.delete(id);
+    await db.pendingTransactions.delete(id);
     setPending(prev => prev.filter(p => p.id !== id));
   }
 
@@ -187,7 +175,6 @@ export default function TransactionsPage() {
         </button>
       </div>
 
-      {/* Quick Entry Form */}
       {showForm && (
         <form onSubmit={handleQuickSubmit} className="bg-surface rounded-xl p-4 space-y-3">
           <div className="grid grid-cols-3 gap-2">
@@ -241,15 +228,11 @@ export default function TransactionsPage() {
               required
             >
               <option value="">Selecciona una cuenta</option>
-              {accounts.map((acc: any) => {
-                const attrs = acc.attributes || acc;
-                const id = acc.id || attrs.id;
-                return (
-                  <option key={id} value={id}>
-                    {attrs.name} ({attrs.currency_code || attrs.currency})
-                  </option>
-                );
-              })}
+              {accounts.map((acc: any) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.name} ({acc.currency})
+                </option>
+              ))}
             </select>
           </div>
 
@@ -285,18 +268,13 @@ export default function TransactionsPage() {
                 className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="">Sin categoría</option>
-                {categories.map((cat: any) => {
-                  const attrs = cat.attributes || cat;
-                  const id = cat.id || attrs.id;
-                  return (
-                    <option key={id} value={id}>{attrs.name}</option>
-                  );
-                })}
+                {categories.map((cat: any) => (
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                ))}
               </select>
             </div>
           </div>
 
-          {/* Comisión toggle */}
           <div>
             <button
               type="button"
@@ -347,13 +325,9 @@ export default function TransactionsPage() {
                   className="w-full bg-surface border border-surface-light rounded-lg px-3 py-2 text-text focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Sin categoría</option>
-                  {categories.map((cat: any) => {
-                    const attrs = cat.attributes || cat;
-                    const id = cat.id || attrs.id;
-                    return (
-                      <option key={id} value={id}>{attrs.name}</option>
-                    );
-                  })}
+                  {categories.map((cat: any) => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -383,7 +357,6 @@ export default function TransactionsPage() {
         </form>
       )}
 
-      {/* Tabs */}
       <div className="flex gap-1 bg-surface rounded-lg p-1">
         <button
           onClick={() => setTab('all')}
@@ -408,7 +381,6 @@ export default function TransactionsPage() {
         </button>
       </div>
 
-      {/* Pending Transactions */}
       {tab === 'pending' && (
         <div className="space-y-2">
           {activePending.length === 0 && (
@@ -423,7 +395,7 @@ export default function TransactionsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-medium truncate">{tx.description}</p>
                   <p className="text-xs text-text-muted mt-0.5">
-                    {format(new Date(tx.date), 'dd/MM/yy')} · {tx.accountName}
+                    {tx.date} · {tx.accountName}
                     {tx.categoryName && ` · ${tx.categoryName}`}
                   </p>
                   {tx.fee && tx.fee > 0 && (
@@ -458,7 +430,6 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* All Transactions */}
       {tab === 'all' && (
         <div className="space-y-1">
           {loading ? (
@@ -473,13 +444,11 @@ export default function TransactionsPage() {
                 </div>
               )}
               {transactions.map((tx: any) => {
-                const attrs = tx.attributes || tx;
-                const type = attrs.type;
-                const amount = parseFloat(attrs.amount || '0');
-                const currency = attrs.currency_code || attrs.currency || 'USD';
+                const type = tx.type;
+                const amount = parseFloat(tx.amount || '0');
+                const currency = tx.currency || 'USD';
                 const isNegative = type === 'withdrawal' || amount < 0;
-                const date = attrs.date || attrs.createdAt;
-                const desc = attrs.description || attrs.notes || 'Sin descripción';
+                const desc = tx.description || 'Sin descripción';
                 const isFee = desc.toLowerCase().startsWith('comisión:');
 
                 return (
@@ -494,9 +463,9 @@ export default function TransactionsPage() {
                         {isFee ? '↳ ' : ''}{desc}
                       </p>
                       <p className="text-xs text-text-muted">
-                        {date ? format(parseISO(date), 'dd/MM/yy') : ''}
-                        {attrs.category_name && ` · ${attrs.category_name}`}
-                        {attrs.source_name && ` · ${attrs.source_name}`}
+                        {tx.date}
+                        {tx.category_name && ` · ${tx.category_name}`}
+                        {tx.source_name && ` · ${tx.source_name}`}
                         {isFee && <span className="text-text-muted"> · Comisión</span>}
                       </p>
                     </div>

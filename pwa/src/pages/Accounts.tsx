@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api } from '@/lib/firefly-api';
+import { db } from '@/lib/db';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import { useAuth } from '@/lib/auth-context';
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -15,8 +14,8 @@ export default function AccountsPage() {
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.accounts.list();
-      setAccounts(Array.isArray(res) ? res : res.data || []);
+      const list = await db.accounts.list();
+      setAccounts(list);
     } catch (err) {
       console.error(err);
       setError('Error al cargar cuentas');
@@ -31,29 +30,40 @@ export default function AccountsPage() {
     setSelected(account);
     setTxHistory([]);
     try {
-      const res = await api.accounts.transactions(account.id, { limit: 30 });
-      setTxHistory(Array.isArray(res) ? res : res.data || []);
+      const txs = await db.accounts.transactions(account.id, { limit: 30 });
+      setTxHistory(txs);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleReconcile() {
+    if (!selected || !reconcileAmount) return;
+    const newBalance = parseFloat(reconcileAmount);
+    if (isNaN(newBalance)) return;
+    try {
+      await db.accounts.update(selected.id, {
+        current_balance: newBalance,
+        initial_balance: newBalance,
+      });
+      setShowReconcile(false);
+      setReconcileAmount('');
+      fetchAccounts();
     } catch (err) {
       console.error(err);
     }
   }
 
   const totalUSD = accounts.reduce((sum: number, acc: any) => {
-    const attrs = acc.attributes || acc;
-    const balance = parseFloat(attrs.current_balance || attrs.currentBalance || '0');
-    const currency = attrs.currency_code || attrs.currency || 'USD';
-    if (currency === 'USD') return sum + balance;
-    if (currency === 'USDT') return sum + balance;
-    if (currency === 'VES') return sum;
-    if (currency === 'EUR') return sum;
-    if (currency === 'BTC') return sum;
-    return sum + balance;
+    const balance = parseFloat(acc.current_balance || '0');
+    const currency = acc.currency || 'USD';
+    if (currency === 'USD' || currency === 'USDT') return sum + balance;
+    return sum;
   }, 0);
 
   if (selected) {
-    const attrs = selected.attributes || selected;
-    const balance = parseFloat(attrs.current_balance || attrs.currentBalance || '0');
-    const currency = attrs.currency_code || attrs.currency || 'USD';
+    const balance = parseFloat(selected.current_balance || '0');
+    const currency = selected.currency || 'USD';
 
     return (
       <div className="p-4 space-y-4 max-w-lg mx-auto">
@@ -65,12 +75,12 @@ export default function AccountsPage() {
         </button>
 
         <div className="bg-surface rounded-xl p-4">
-          <h2 className="text-lg font-bold">{attrs.name}</h2>
+          <h2 className="text-lg font-bold">{selected.name}</h2>
           <p className="text-3xl font-bold mt-2 text-primary">
             {formatCurrency(balance, currency)}
           </p>
           <p className="text-sm text-text-muted mt-1">
-            {currency} · {attrs.type}
+            {currency} · {selected.type}
           </p>
         </div>
 
@@ -97,6 +107,12 @@ export default function AccountsPage() {
                 Diferencia: {formatCurrency(parseFloat(reconcileAmount) - balance, currency)}
               </div>
             )}
+            <button
+              onClick={handleReconcile}
+              className="w-full bg-primary hover:bg-primary-dark text-white font-medium rounded-lg py-2 transition-colors"
+            >
+              Guardar conciliación
+            </button>
           </div>
         )}
 
@@ -111,14 +127,13 @@ export default function AccountsPage() {
               </p>
             )}
             {txHistory.map((tx: any) => {
-              const t = tx.attributes || tx;
-              const amount = parseFloat(t.amount || '0');
-              const isNegative = t.type === 'withdrawal' || amount < 0;
+              const amount = parseFloat(tx.amount || '0');
+              const isNegative = tx.type === 'withdrawal' || amount < 0;
               return (
                 <div key={tx.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{t.description || 'Sin descripción'}</p>
-                    <p className="text-xs text-text-muted">{formatDate(t.date || t.createdAt)}</p>
+                    <p className="text-sm font-medium truncate">{tx.description || 'Sin descripción'}</p>
+                    <p className="text-xs text-text-muted">{formatDate(tx.date || tx.created_at)}</p>
                   </div>
                   <span className={`text-sm font-semibold ml-3 ${isNegative ? 'text-danger' : 'text-secondary'}`}>
                     {isNegative ? '-' : '+'}{formatCurrency(Math.abs(amount), currency)}
@@ -156,9 +171,8 @@ export default function AccountsPage() {
           </div>
         ) : (
           accounts.map((acc: any) => {
-            const attrs = acc.attributes || acc;
-            const balance = parseFloat(attrs.current_balance || attrs.currentBalance || '0');
-            const currency = attrs.currency_code || attrs.currency || 'USD';
+            const balance = parseFloat(acc.current_balance || '0');
+            const currency = acc.currency || 'USD';
             return (
               <button
                 key={acc.id}
@@ -167,7 +181,7 @@ export default function AccountsPage() {
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium">{attrs.name}</p>
+                    <p className="font-medium">{acc.name}</p>
                     <p className="text-xs text-text-muted mt-0.5">{currency}</p>
                   </div>
                   <div className="text-right">

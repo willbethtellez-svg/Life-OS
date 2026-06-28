@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { format, parseISO, startOfMonth, endOfMonth } from 'date-fns';
-import { es } from 'date-fns/locale';
-import { api } from '@/lib/firefly-api';
+import { db } from '@/lib/db';
 import { formatCurrency, formatMonth } from '@/lib/utils';
 
 export default function CategoriesPage() {
@@ -15,12 +14,12 @@ export default function CategoriesPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [catRes, budRes] = await Promise.all([
-        api.categories.list(),
-        api.budgets.list(),
+      const [catList, budList] = await Promise.all([
+        db.categories.list(),
+        db.budgets.list(),
       ]);
-      setCategories(Array.isArray(catRes) ? catRes : catRes.data || []);
-      setBudgets(Array.isArray(budRes) ? budRes : budRes.data || []);
+      setCategories(catList);
+      setBudgets(budList);
     } catch (err) {
       console.error(err);
     } finally {
@@ -36,8 +35,9 @@ export default function CategoriesPage() {
     try {
       const start = startOfMonth(parseISO(currentMonth)).toISOString().split('T')[0];
       const end = endOfMonth(parseISO(currentMonth)).toISOString().split('T')[0];
-      const res = await api.categories.transactions(cat.id, { start, end });
-      setTxHistory(Array.isArray(res) ? res : res.data || []);
+      const allTxs = await db.transactions.list({ start, end, limit: 500 });
+      const filtered = allTxs.filter((tx: any) => tx.category_id === cat.id);
+      setTxHistory(filtered);
     } catch (err) {
       console.error(err);
     }
@@ -54,7 +54,7 @@ export default function CategoriesPage() {
         </button>
 
         <div className="bg-surface rounded-xl p-4">
-          <h2 className="text-lg font-bold">{selected.attributes?.name || selected.name}</h2>
+          <h2 className="text-lg font-bold">{selected.name}</h2>
           <p className="text-sm text-text-muted mt-1">{formatMonth(currentMonth)}</p>
         </div>
 
@@ -69,15 +69,14 @@ export default function CategoriesPage() {
               </p>
             )}
             {txHistory.map((tx: any) => {
-              const t = tx.attributes || tx;
-              const amount = parseFloat(t.amount || '0');
-              const isNegative = t.type === 'withdrawal' || amount < 0;
-              const currency = t.currency_code || t.currency || 'USD';
+              const amount = parseFloat(tx.amount || '0');
+              const isNegative = tx.type === 'withdrawal' || amount < 0;
+              const currency = tx.currency || 'USD';
               return (
                 <div key={tx.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{t.description || 'Sin descripción'}</p>
-                    <p className="text-xs text-text-muted">{format(parseISO(t.date || t.createdAt), 'dd/MM/yy')}</p>
+                    <p className="text-sm font-medium truncate">{tx.description || 'Sin descripción'}</p>
+                    <p className="text-xs text-text-muted">{format(parseISO(tx.date), 'dd/MM/yy')}</p>
                   </div>
                   <span className={`text-sm font-semibold ml-3 ${isNegative ? 'text-danger' : 'text-secondary'}`}>
                     {isNegative ? '-' : '+'}{formatCurrency(Math.abs(amount), currency)}
@@ -106,15 +105,14 @@ export default function CategoriesPage() {
         ) : (
           <div className="space-y-2">
             {budgets.map((bud: any) => {
-              const attrs = bud.attributes || bud;
-              const budgeted = parseFloat(attrs.budget_limit || attrs.budgeted || '0');
-              const spent = parseFloat(attrs.spent || '0');
-              const currency = attrs.currency_code || 'USD';
+              const budgeted = parseFloat(bud.budget_limit || '0');
+              const spent = parseFloat(bud.spent || '0');
+              const currency = bud.currency || 'USD';
               const progress = budgeted > 0 ? Math.min(100, (spent / budgeted) * 100) : 0;
               return (
                 <div key={bud.id}>
                   <div className="flex justify-between text-sm mb-1">
-                    <span>{attrs.name}</span>
+                    <span>{bud.name}</span>
                     <span className={progress > 100 ? 'text-danger' : 'text-text-muted'}>
                       {formatCurrency(spent, currency)} / {formatCurrency(budgeted, currency)}
                     </span>
@@ -144,7 +142,7 @@ export default function CategoriesPage() {
               onClick={() => loadCategoryTransactions(cat)}
               className="w-full bg-surface rounded-xl p-4 text-left hover:bg-surface-light transition-colors"
             >
-              <p className="font-medium">{cat.attributes?.name || cat.name}</p>
+              <p className="font-medium">{cat.name}</p>
             </button>
           ))
         )}

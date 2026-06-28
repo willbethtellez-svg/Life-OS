@@ -3,34 +3,32 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, signup } = useAuth();
   const navigate = useNavigate();
-  const [token, setToken] = useState("");
-  const [baseUrl, setBaseUrl] = useState("http://localhost:8080");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isSignup, setIsSignup] = useState(false);
   const [error, setError] = useState("");
-  const [testing, setTesting] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    setTesting(true);
+    setLoading(true);
 
     try {
-      const res = await fetch(`${baseUrl}/api/v1/about`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!res.ok) throw new Error("No se pudo conectar. Verifica la URL y el token.");
-
-      const data = await res.json();
-      if (!data?.data) throw new Error("Respuesta inesperada del servidor");
-
-      login(token, baseUrl);
-      navigate("/dashboard", { replace: true });
+      if (isSignup) {
+        await signup(email, password);
+        setError("Cuenta creada. Revisa tu email para confirmar (o revisa el spam).");
+        setIsSignup(false);
+      } else {
+        await login(email, password);
+        navigate("/dashboard", { replace: true });
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error de conexión");
+      setError(err instanceof Error ? err.message : "Error de autenticación");
     } finally {
-      setTesting(false);
+      setLoading(false);
     }
   }
 
@@ -44,45 +42,51 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-muted mb-1">URL de Firefly III</label>
+            <label className="block text-sm font-medium text-text-muted mb-1">Email</label>
             <input
-              type="url"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               className="w-full bg-surface border border-surface-light rounded-lg px-4 py-3 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="http://localhost:8080"
+              placeholder="tu@email.com"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-muted mb-1">Token de acceso personal</label>
+            <label className="block text-sm font-medium text-text-muted mb-1">Contraseña</label>
             <input
               type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               className="w-full bg-surface border border-surface-light rounded-lg px-4 py-3 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="eyJ... o tu token"
+              placeholder="••••••••"
               required
+              minLength={6}
             />
           </div>
 
           {error && (
-            <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>
+            <div className={`border rounded-lg px-4 py-3 text-sm ${
+              error.includes("creada") ? "bg-secondary/10 border-secondary/30 text-secondary" : "bg-danger/10 border-danger/30 text-danger"
+            }`}>{error}</div>
           )}
 
           <button
             type="submit"
-            disabled={testing}
+            disabled={loading}
             className="w-full bg-primary hover:bg-primary-dark disabled:opacity-50 text-white font-medium rounded-lg px-4 py-3 transition-colors"
           >
-            {testing ? "Verificando..." : "Conectar"}
+            {loading ? "Cargando..." : isSignup ? "Crear cuenta" : "Entrar"}
           </button>
         </form>
 
-        <p className="text-xs text-text-muted/60 text-center mt-6">
-          Necesitas una instancia de Firefly III corriendo. El token se genera en Firefly III &gt; Opciones &gt; Perfil &gt; Tokens de acceso personal.
-        </p>
+        <button
+          onClick={() => { setIsSignup(!isSignup); setError(""); }}
+          className="w-full text-center text-sm text-primary hover:underline mt-4"
+        >
+          {isSignup ? "¿Ya tienes cuenta? Inicia sesión" : "¿No tienes cuenta? Créala aquí"}
+        </button>
       </div>
     </main>
   );

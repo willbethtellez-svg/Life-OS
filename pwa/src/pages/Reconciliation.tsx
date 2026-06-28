@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api } from '@/lib/firefly-api';
-import { localDB, type AccountAcquisition } from '@/lib/db';
+import { db } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
-import { useAuth } from '@/lib/auth-context';
-import type { ExchangeRate } from '@/types';
+import type { AccountAcquisition, ExchangeRate } from '@/types';
 
 interface AccountBreakdown {
   id: string;
@@ -26,7 +24,6 @@ interface JarTotal {
 }
 
 export default function ReconciliationPage() {
-  const { token, baseUrl } = useAuth();
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<AccountBreakdown[]>([]);
   const [jars, setJars] = useState<JarTotal[]>([]);
@@ -39,51 +36,44 @@ export default function ReconciliationPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
-
     try {
-      const [accRes, jarRes, rates, acqs] = await Promise.all([
-        api.accounts.list({ type: 'asset' }),
-        api.piggyBanks.list(),
-        localDB.exchangeRates.getByDate(new Date().toISOString().split('T')[0]),
-        localDB.accountAcquisition.getAll(),
+      const today = new Date().toISOString().split('T')[0];
+      const [accList, jarList, rates, acqs] = await Promise.all([
+        db.accounts.list({ type: 'asset' }),
+        db.piggyBanks.list(),
+        db.exchangeRates.getByDate(today),
+        db.accountAcquisition.getAll(),
       ]);
-
-      const accList = (Array.isArray(accRes) ? accRes : accRes.data || []) as any[];
-      const jarList = (Array.isArray(jarRes) ? jarRes : jarRes.data || []) as any[];
 
       setTodayRates(rates);
       setAcquisitions(acqs);
 
-      const vesRate = rates.find(r => r.from === 'USDT' && r.to === 'VES')?.rate
-        || rates.find(r => r.from === 'USD' && r.to === 'VES')?.rate
+      const vesRate = rates.find(r => r.from_currency === 'USDT' && r.to_currency === 'VES')?.rate
+        || rates.find(r => r.from_currency === 'USD' && r.to_currency === 'VES')?.rate
         || null;
 
       const parsed: AccountBreakdown[] = accList.map((acc: any) => {
-        const attrs = acc.attributes || acc;
-        const currency = attrs.currency_code || attrs.currency || 'USD';
-        const balance = parseFloat(attrs.current_balance || attrs.currentBalance || '0');
+        const currency = acc.currency || 'USD';
+        const balance = parseFloat(acc.current_balance || '0');
         const excluded = currency === 'EUR' || currency === 'BTC';
-        const acq = acqs.find(a => a.accountId === acc.id || a.accountId === attrs.id);
+        const acq = acqs.find(a => a.account_id === acc.id);
         let usdValue: number;
         let usdCost: number | null = null;
 
-        if (currency === 'USD') {
-          usdValue = balance;
-          usdCost = balance;
-        } else if (currency === 'USDT') {
+        if (currency === 'USD' || currency === 'USDT') {
           usdValue = balance;
           usdCost = balance;
         } else if (currency === 'VES' && vesRate) {
           usdValue = balance / vesRate;
-          usdCost = acq?.averageRate ? balance / acq.averageRate : null;
+          usdCost = acq?.average_rate ? balance / acq.average_rate : null;
         } else {
           usdValue = 0;
           usdCost = null;
         }
 
         return {
-          id: acc.id || attrs.id,
-          name: attrs.name,
+          id: acc.id,
+          name: acc.name,
           currency,
           balance,
           usdValue,
@@ -96,13 +86,12 @@ export default function ReconciliationPage() {
       setAccounts(parsed);
 
       const jarParsed: JarTotal[] = jarList.map((jar: any) => {
-        const attrs = jar.attributes || jar;
-        const amount = parseFloat(attrs.current_amount || '0');
-        const target = parseFloat(attrs.target_amount || '0');
-        const currency = attrs.currency_code || 'USD';
+        const amount = parseFloat(jar.current_amount || '0');
+        const target = parseFloat(jar.target_amount || '0');
+        const currency = jar.currency || 'USD';
         return {
-          id: jar.id || attrs.id,
-          name: attrs.name,
+          id: jar.id,
+          name: jar.name,
           amount,
           currency,
           usdValue: currency === 'VES' && vesRate ? amount / vesRate : amount,
@@ -117,7 +106,7 @@ export default function ReconciliationPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, baseUrl]);
+  }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -125,11 +114,10 @@ export default function ReconciliationPage() {
     const rate = parseFloat(acqForm.rate);
     if (isNaN(rate) || rate <= 0) return;
 
-    await localDB.accountAcquisition.set({
-      accountId,
-      averageRate: rate,
+    await db.accountAcquisition.set({
+      account_id: accountId,
+      average_rate: rate,
       notes: 'Configurado manualmente',
-      updatedAt: new Date().toISOString(),
     });
 
     setEditingAcq(null);
@@ -137,7 +125,6 @@ export default function ReconciliationPage() {
     fetchData();
   }
 
-  // Calcular resumen
   const usdAccounts = accounts.filter(a => !a.excluded);
   const totalUsdDirect = usdAccounts
     .filter(a => a.currency === 'USD' || a.currency === 'USDT')
@@ -148,9 +135,7 @@ export default function ReconciliationPage() {
   const totalUsdAccounts = totalUsdDirect + totalVesAtToday;
   const totalUsdCost = totalUsdDirect + totalVesAtCost;
   const rateAdjustment = totalUsdAccounts - totalUsdCost;
-
   const totalJarsUsd = jars.reduce((s, j) => s + j.usdValue, 0);
-
   const gap = totalUsdAccounts - totalJarsUsd;
   const gapAfterRate = totalUsdCost - totalJarsUsd;
 
@@ -167,16 +152,11 @@ export default function ReconciliationPage() {
       <h1 className="text-xl font-bold">Conciliación</h1>
 
       {error && (
-        <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">
-          {error}
-        </div>
+        <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>
       )}
 
-      {/* Resumen principal */}
       <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-          Resumen General
-        </h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Resumen General</h2>
         <div className="space-y-2">
           <div className="flex justify-between text-lg">
             <span className="text-text-muted">Cuentas disponibles</span>
@@ -198,11 +178,8 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* Análisis de la diferencia */}
       <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-          Análisis de la Diferencia
-        </h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Análisis de la Diferencia</h2>
         <div className="space-y-3">
           <div className="bg-background rounded-lg p-3">
             <div className="flex justify-between text-sm mb-1">
@@ -231,44 +208,26 @@ export default function ReconciliationPage() {
 
           <div className="bg-background rounded-lg p-3 space-y-2">
             <p className="text-sm font-semibold mb-2">Diagnóstico</p>
-
             {Math.abs(gap) < 1 && (
               <div className="flex items-center gap-2 text-secondary text-sm">
-                <span>✓</span>
-                <span>¡Todo cuadra! Cuentas y jarras están alineadas.</span>
+                <span>✓</span><span>¡Todo cuadra! Cuentas y jarras están alineadas.</span>
               </div>
             )}
-
             {Math.abs(rateAdjustment) > 1 && (
               <div className="flex items-center gap-2 text-warning text-sm">
                 <span>⟳</span>
                 <span>
                   <strong>Ajuste por tasa de cambio:</strong> {formatCurrency(Math.abs(rateAdjustment))}
-                  {rateAdjustment > 0
-                    ? ' (el VES subió vs USD, las cuentas valen más)'
-                    : ' (el VES bajó vs USD, las cuentas valen menos)'}
+                  {rateAdjustment > 0 ? ' (el VES subió vs USD)' : ' (el VES bajó vs USD)'}
                 </span>
               </div>
             )}
-
             {Math.abs(gapAfterRate) > 1 && (
               <div className="flex items-center gap-2 text-danger text-sm">
                 <span>!</span>
                 <span>
-                  <strong>Diferencia real (después de tasa):</strong> {formatCurrency(Math.abs(gapAfterRate))}
-                  {gapAfterRate > 0
-                    ? ' — Hay más dinero en cuentas del que está asignado en jarras. ¿Dinero sin asignar?'
-                    : ' — Hay menos dinero en cuentas del que está asignado en jarras. ¿Faltan transacciones por registrar?'}
-                </span>
-              </div>
-            )}
-
-            {Math.abs(gap) > 1 && Math.abs(rateAdjustment) < 1 && Math.abs(gapAfterRate) < 1 && (
-              <div className="flex items-center gap-2 text-text-muted text-sm">
-                <span>i</span>
-                <span>
-                  La diferencia es explicada completamente por el ajuste de tasa de cambio.
-                  No hay registros faltantes.
+                  <strong>Diferencia real:</strong> {formatCurrency(Math.abs(gapAfterRate))}
+                  {gapAfterRate > 0 ? ' — Dinero sin asignar en jarras.' : ' — Faltan transacciones por registrar.'}
                 </span>
               </div>
             )}
@@ -276,15 +235,12 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* Detalle de cuentas */}
       <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-          Cuentas Disponibles
-        </h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Cuentas Disponibles</h2>
         <div className="space-y-3">
           {usdAccounts.map((acc) => {
             const isVES = acc.currency === 'VES';
-            const acq = acquisitions.find(a => a.accountId === acc.id);
+            const acq = acquisitions.find(a => a.account_id === acc.id);
             return (
               <div key={acc.id} className="border-b border-surface-light last:border-0 pb-3 last:pb-0">
                 <div className="flex items-center justify-between">
@@ -300,13 +256,10 @@ export default function ReconciliationPage() {
                   <div className="text-right">
                     <p className="text-sm font-semibold">{formatCurrency(acc.usdValue)}</p>
                     {isVES && acc.usdCost !== null && acc.usdCost !== acc.usdValue && (
-                      <p className="text-xs text-text-muted">
-                        Costo: {formatCurrency(acc.usdCost)}
-                      </p>
+                      <p className="text-xs text-text-muted">Costo: {formatCurrency(acc.usdCost)}</p>
                     )}
                   </div>
                 </div>
-
                 {isVES && (
                   <div className="mt-2 flex items-center gap-2">
                     {editingAcq === acc.id ? (
@@ -319,30 +272,18 @@ export default function ReconciliationPage() {
                           className="flex-1 bg-background border border-surface-light rounded-lg px-2 py-1 text-xs text-text focus:outline-none focus:ring-1 focus:ring-primary"
                           placeholder="Tasa de adquisición"
                         />
-                        <button
-                          onClick={() => saveAcquisition(acc.id)}
-                          className="bg-primary text-white text-xs px-2 py-1 rounded-lg"
-                        >
-                          Guardar
-                        </button>
-                        <button
-                          onClick={() => { setEditingAcq(null); setAcqForm({ rate: '' }); }}
-                          className="text-text-muted text-xs"
-                        >
-                          ×
-                        </button>
+                        <button onClick={() => saveAcquisition(acc.id)} className="bg-primary text-white text-xs px-2 py-1 rounded-lg">Guardar</button>
+                        <button onClick={() => { setEditingAcq(null); setAcqForm({ rate: '' }); }} className="text-text-muted text-xs">×</button>
                       </div>
                     ) : (
                       <button
                         onClick={() => {
                           setEditingAcq(acc.id);
-                          setAcqForm({ rate: acq?.averageRate?.toString() || acc.rate?.toString() || '' });
+                          setAcqForm({ rate: acq?.average_rate?.toString() || acc.rate?.toString() || '' });
                         }}
                         className="text-xs text-primary hover:underline"
                       >
-                        {acq?.averageRate
-                          ? `Tasa adquisición: 1 USD = ${acq.averageRate.toFixed(2)} VES (editar)`
-                          : 'Configurar tasa de adquisición histórica'}
+                        {acq?.average_rate ? `Tasa adquisición: 1 USD = ${acq.average_rate.toFixed(2)} VES (editar)` : 'Configurar tasa de adquisición histórica'}
                       </button>
                     )}
                   </div>
@@ -350,8 +291,6 @@ export default function ReconciliationPage() {
               </div>
             );
           })}
-
-          {/* Excluidas */}
           {accounts.filter(a => a.excluded).length > 0 && (
             <div className="pt-3 border-t border-surface-light">
               <p className="text-xs text-text-muted mb-2">Excluidas de conciliación:</p>
@@ -366,15 +305,10 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* Detalle de jarras */}
       <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-          Jarras Asignadas
-        </h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Jarras Asignadas</h2>
         <div className="space-y-2">
-          {jars.length === 0 && (
-            <p className="text-text-muted text-sm text-center py-2">Sin jarras configuradas</p>
-          )}
+          {jars.length === 0 && <p className="text-text-muted text-sm text-center py-2">Sin jarras configuradas</p>}
           {jars.map(jar => (
             <div key={jar.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
               <div>
@@ -392,35 +326,11 @@ export default function ReconciliationPage() {
         </div>
       </div>
 
-      {/* Explicación */}
       <div className="bg-background border border-surface-light rounded-xl p-4 text-xs text-text-muted space-y-2">
         <p className="font-semibold text-text">¿Cómo leer esto?</p>
-        <p>
-          <strong className="text-text">Diferencia total</strong> = Cuentas (USD) − Jarras.
-          Incluye el efecto de tasa de cambio.
-        </p>
-        <p>
-          <strong className="text-text">Ajuste por tasa</strong> = La diferencia entre lo que
-          pagaste por tus VES (costo histórico) y lo que valen hoy.
-          Si la tasa se movió, esto aparece como diferencia aunque no falten registros.
-        </p>
-        <p>
-          <strong className="text-text">Diferencia real</strong> = Diferencia total − Ajuste por tasa.
-          Si esto es distinto de cero, faltan o sobran registros. Posibles causas:
-        </p>
-        <ul className="list-disc list-inside space-y-1">
-          <li>Un gasto registrado en jarras pero no como transacción</li>
-          <li>Un ingreso recibido pero no asignado a ninguna jarra</li>
-          <li>Transferencias entre cuentas no registradas</li>
-          <li>Comisiones bancarias no contabilizadas</li>
-        </ul>
-        {vesAccounts.length > 0 && (
-          <p className="mt-2">
-            Para cuentas VES, configura la <strong className="text-text">tasa de adquisición histórica</strong>
-            {' '}tocando el botón azul. Si no sabes la tasa exacta, usa la tasa del día en que
-            abriste la cuenta o la tasa promedio del mes.
-          </p>
-        )}
+        <p><strong className="text-text">Diferencia total</strong> = Cuentas (USD) − Jarras. Incluye el efecto de tasa de cambio.</p>
+        <p><strong className="text-text">Ajuste por tasa</strong> = Diferencia entre costo histórico y valor actual de VES.</p>
+        <p><strong className="text-text">Diferencia real</strong> = Diferencia total − Ajuste por tasa. Si es distinto de cero, faltan o sobran registros.</p>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { localDB } from '@/lib/db';
-import { formatCurrency, generateId } from '@/lib/utils';
+import { db } from '@/lib/db';
+import { formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
 import type { BabyRecord, CurrencyCode } from '@/types';
 
@@ -19,23 +19,21 @@ export default function BabyPage() {
   });
 
   useEffect(() => {
-    localDB.babyRecords.getAll().then(setRecords);
+    db.babyRecords.getAll().then(setRecords);
   }, []);
 
   async function addRecord(e: React.FormEvent) {
     e.preventDefault();
-    const record: BabyRecord = {
-      id: generateId(),
+    const record = await db.babyRecords.set({
       date: form.date,
       type: form.type,
       description: form.description,
       cost: parseFloat(form.cost) || 0,
       currency: 'VES' as CurrencyCode,
-      estimatedCost: parseFloat(form.estimatedCost) || 0,
+      estimated_cost: parseFloat(form.estimatedCost) || 0,
       notes: form.notes,
       completed: form.type === 'expense',
-    };
-    await localDB.babyRecords.set(record);
+    });
     setRecords(prev => [record, ...prev]);
     setShowForm(false);
     setForm({ type: 'expense', description: '', cost: '', estimatedCost: '', date: new Date().toISOString().split('T')[0], notes: '' });
@@ -43,8 +41,8 @@ export default function BabyPage() {
 
   const totalSpent = records.filter(r => r.type === 'expense' || r.type === 'purchase').reduce((s, r) => s + r.cost, 0);
   const upcoming = records.filter(r => !r.completed && r.type !== 'expense');
-  const totalEstimated = upcoming.reduce((s, r) => s + r.estimatedCost, 0);
-  const totalExpected = records.filter(r => r.estimatedCost > 0).reduce((s, r) => s + r.estimatedCost, 0);
+  const totalEstimated = upcoming.reduce((s, r) => s + r.estimated_cost, 0);
+  const totalExpected = records.filter(r => r.estimated_cost > 0).reduce((s, r) => s + r.estimated_cost, 0);
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto">
@@ -58,19 +56,14 @@ export default function BabyPage() {
         </button>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-surface rounded-xl p-4">
           <p className="text-text-muted text-xs uppercase tracking-wide">Total gastado</p>
-          <p className="text-2xl font-bold text-danger mt-1">
-            {formatCurrency(totalSpent)}
-          </p>
+          <p className="text-2xl font-bold text-danger mt-1">{formatCurrency(totalSpent)}</p>
         </div>
         <div className="bg-surface rounded-xl p-4">
           <p className="text-text-muted text-xs uppercase tracking-wide">Presupuesto estimado</p>
-          <p className="text-2xl font-bold text-warning mt-1">
-            {formatCurrency(totalExpected)}
-          </p>
+          <p className="text-2xl font-bold text-warning mt-1">{formatCurrency(totalExpected)}</p>
         </div>
       </div>
 
@@ -191,7 +184,7 @@ export default function BabyPage() {
             <p className="font-medium mt-1">{r.description}</p>
             <div className="flex items-center gap-3 mt-1.5 text-sm text-text-muted">
               {r.cost > 0 && <span>💵 {formatCurrency(r.cost)}</span>}
-              {r.estimatedCost > 0 && r.cost === 0 && <span>💰 Est. {formatCurrency(r.estimatedCost)}</span>}
+              {r.estimated_cost > 0 && r.cost === 0 && <span>💰 Est. {formatCurrency(r.estimated_cost)}</span>}
             </div>
             {r.notes && <p className="text-xs text-text-muted mt-1">{r.notes}</p>}
           </div>

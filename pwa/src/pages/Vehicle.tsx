@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { localDB } from '@/lib/db';
-import { formatCurrency, generateId } from '@/lib/utils';
+import { db } from '@/lib/db';
+import { formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
 import type { VehicleRecord, CurrencyCode } from '@/types';
 
@@ -20,10 +20,11 @@ export default function VehiclePage() {
   });
 
   useEffect(() => {
-    localDB.vehicleRecords.getAll().then(all => {
-      setRecords(all.sort((a, b) => b.date.localeCompare(a.date) || b.mileage - a.mileage));
-      if (all.length > 0) {
-        setCurrentMileage(Math.max(...all.map(r => r.mileage)));
+    db.vehicleRecords.getAll().then(all => {
+      const sorted = all.sort((a, b) => b.date.localeCompare(a.date) || b.mileage - a.mileage);
+      setRecords(sorted);
+      if (sorted.length > 0) {
+        setCurrentMileage(Math.max(...sorted.map(r => r.mileage)));
       }
     });
   }, []);
@@ -31,20 +32,16 @@ export default function VehiclePage() {
   async function addRecord(e: React.FormEvent) {
     e.preventDefault();
     const mileage = parseInt(form.mileage) || currentMileage;
-    const record: VehicleRecord = {
-      id: generateId(),
+    const record = await db.vehicleRecords.set({
       date: form.date,
       type: form.type,
       description: form.description,
       mileage,
       cost: parseFloat(form.cost) || 0,
       currency: 'VES' as CurrencyCode,
-      nextMileage: form.nextMileage ? parseInt(form.nextMileage) : null,
-      nextDate: null,
+      next_mileage: form.nextMileage ? parseInt(form.nextMileage) : null,
       notes: form.notes,
-      transactionId: null,
-    };
-    await localDB.vehicleRecords.set(record);
+    });
     setRecords(prev => [record, ...prev]);
     setCurrentMileage(Math.max(currentMileage, mileage));
     setShowForm(false);
@@ -52,7 +49,7 @@ export default function VehiclePage() {
   }
 
   const lastMaintenance = records.filter(r => r.type === 'maintenance' || r.type === 'repair');
-  const nextService = lastMaintenance.find(r => r.nextMileage);
+  const nextService = lastMaintenance.find(r => r.next_mileage);
 
   return (
     <div className="p-4 space-y-4 max-w-lg mx-auto">
@@ -66,19 +63,14 @@ export default function VehiclePage() {
         </button>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-surface rounded-xl p-4">
           <p className="text-text-muted text-xs uppercase tracking-wide">Kilometraje actual</p>
-          <p className="text-2xl font-bold text-primary mt-1">
-            {currentMileage.toLocaleString()} km
-          </p>
+          <p className="text-2xl font-bold text-primary mt-1">{currentMileage.toLocaleString()} km</p>
         </div>
         <div className="bg-surface rounded-xl p-4">
           <p className="text-text-muted text-xs uppercase tracking-wide">Total gastado</p>
-          <p className="text-2xl font-bold text-danger mt-1">
-            {formatCurrency(records.reduce((s, r) => s + r.cost, 0))}
-          </p>
+          <p className="text-2xl font-bold text-danger mt-1">{formatCurrency(records.reduce((s, r) => s + r.cost, 0))}</p>
         </div>
       </div>
 
@@ -86,7 +78,7 @@ export default function VehiclePage() {
         <div className="bg-warning/10 border border-warning/30 rounded-xl p-4">
           <p className="text-sm font-medium text-warning">Próximo mantenimiento</p>
           <p className="text-xs text-text-muted mt-1">
-            {nextService.description} · Cada {nextService.nextMileage?.toLocaleString()} km
+            {nextService.description} · Cada {nextService.next_mileage?.toLocaleString()} km
           </p>
         </div>
       )}
@@ -195,12 +187,12 @@ export default function VehiclePage() {
               <span>📍 {r.mileage.toLocaleString()} km</span>
               {r.cost > 0 && <span className="font-medium text-text">💵 {formatCurrency(r.cost)}</span>}
             </div>
-            {r.nextMileage && (
+            {r.next_mileage && (
               <div className="mt-2 text-xs text-warning">
-                Próximo: {r.nextMileage.toLocaleString()} km
+                Próximo: {r.next_mileage.toLocaleString()} km
                 {currentMileage > 0 && (
                   <span className="text-text-muted ml-1">
-                    (en {(r.nextMileage - currentMileage).toLocaleString()} km)
+                    (en {(r.next_mileage - currentMileage).toLocaleString()} km)
                   </span>
                 )}
               </div>

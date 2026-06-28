@@ -1,25 +1,24 @@
 import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
-import { localDB } from '@/lib/db';
-import { api } from '@/lib/firefly-api';
+import { db } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
-import type { ExchangeRate, CurrencyCode } from '@/types';
+import type { ExchangeRate } from '@/types';
 
 export default function RatesPage() {
   const [rates, setRates] = useState<ExchangeRate[]>([]);
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
   const [message, setMessage] = useState('');
+  const [manualFrom, setManualFrom] = useState('USDT');
+  const [manualTo, setManualTo] = useState('VES');
+  const [manualRate, setManualRate] = useState('');
 
-  useEffect(() => {
-    loadRates();
-  }, []);
+  useEffect(() => { loadRates(); }, []);
 
   async function loadRates() {
     setLoading(true);
     try {
-      const all = await localDB.exchangeRates.getAll();
-      setRates(all.sort((a, b) => b.date.localeCompare(a.date)));
+      const all = await db.exchangeRates.getAll();
+      setRates(all);
     } catch (err) {
       console.error(err);
     } finally {
@@ -27,133 +26,39 @@ export default function RatesPage() {
     }
   }
 
-  async function calculateDailyRate() {
-    setCalculating(true);
-    setMessage('Calculando tasa promedio del día...');
+  async function addManualRate() {
+    const rate = parseFloat(manualRate);
+    if (isNaN(rate) || rate <= 0) {
+      setMessage('Ingresa una tasa válida');
+      return;
+    }
 
     try {
       const today = new Date().toISOString().split('T')[0];
-      const start = today;
-      const end = today;
-
-      const res = await api.transactions.list({ start, end, limit: 200 });
-      const txs = Array.isArray(res) ? res : res.data || [];
-
-      const transfers = txs.filter((tx: any) => {
-        const t = tx.attributes || tx;
-        return t.type === 'transfer' &&
-          t.currency_code === 'USDT' &&
-          t.foreign_currency_code === 'VES';
+      await db.exchangeRates.set({
+        date: today,
+        from_currency: manualFrom,
+        to_currency: manualTo,
+        rate,
+        source: 'manual',
+        transactions_used: 0,
       });
-
-      if (transfers.length === 0) {
-        const vesTxs = txs.filter((tx: any) => {
-          const t = tx.attributes || tx;
-          return t.type === 'transfer' && (
-            (t.currency_code === 'USDT' || t.currency_code === 'USD') &&
-            t.foreign_currency_code === 'VES'
-          );
-        });
-        if (vesTxs.length === 0) {
-          setMessage('No se encontraron transferencias USD→VES hoy. Buscando en los últimos 7 días...');
-
-          const lastWeek = new Date();
-          lastWeek.setDate(lastWeek.getDate() - 7);
-          const weekRes = await api.transactions.list({
-            start: lastWeek.toISOString().split('T')[0],
-            end: today,
-            limit: 500,
-          });
-          const weekTxs = Array.isArray(weekRes) ? weekRes : weekRes.data || [];
-          const weekTransfers = weekTxs.filter((tx: any) => {
-            const t = tx.attributes || tx;
-            return t.type === 'transfer' &&
-              (t.currency_code === 'USDT' || t.currency_code === 'USD') &&
-              t.foreign_currency_code === 'VES';
-          });
-
-          if (weekTransfers.length === 0) {
-            setMessage('No hay transferencias USD→VES en los últimos 7 días. Agrega la tasa manualmente.');
-          } else {
-            processTransfers(weekTransfers);
-          }
-        } else {
-          processTransfers(vesTxs);
-        }
-      } else {
-        processTransfers(transfers);
-      }
+      setMessage(`Tasa manual guardada: 1 ${manualFrom} = ${rate} ${manualTo}`);
+      setManualRate('');
+      loadRates();
     } catch (err) {
       console.error(err);
-      setMessage('Error al calcular tasa de cambio');
-    } finally {
-      setCalculating(false);
+      setMessage('Error al guardar tasa');
     }
   }
 
-  async function processTransfers(transfers: any[]) {
-    const today = new Date().toISOString().split('T')[0];
-    let totalUSD = 0;
-    let totalVES = 0;
-    let count = 0;
-
-    for (const tx of transfers) {
-      const t = tx.attributes || tx;
-      const amount = Math.abs(parseFloat(t.amount || '0'));
-      const foreignAmount = Math.abs(parseFloat(t.foreign_amount || '0'));
-
-      if (t.currency_code === 'USDT' || t.currency_code === 'USD') {
-        totalUSD += amount;
-        totalVES += foreignAmount;
-      } else {
-        totalUSD += foreignAmount;
-        totalVES += amount;
-      }
-      count++;
-    }
-
-    if (totalUSD > 0) {
-      const avgRate = totalVES / totalUSD;
-
-      const rate: ExchangeRate = {
-        date: today,
-        from: 'USDT' as CurrencyCode,
-        to: 'VES' as CurrencyCode,
-        rate: Math.round(avgRate * 100) / 100,
-        source: 'p2p_average',
-        transactionsUsed: count,
-      };
-
-      await localDB.exchangeRates.set(rate);
-      setMessage(`Tasa del día calculada: 1 USDT = ${rate.rate.toFixed(2)} VES (basada en ${count} transferencias)`);
-      loadRates();
-    }
-  }
-
-  async function addOfficialRate() {
+  async function addOfficialRates() {
     try {
       const today = new Date().toISOString().split('T')[0];
-
-      const eurRate: ExchangeRate = {
-        date: today,
-        from: 'EUR' as CurrencyCode,
-        to: 'USD' as CurrencyCode,
-        rate: 1.08,
-        source: 'official',
-        transactionsUsed: 0,
-      };
-
-      const btcRate: ExchangeRate = {
-        date: today,
-        from: 'BTC' as CurrencyCode,
-        to: 'USD' as CurrencyCode,
-        rate: 65000,
-        source: 'official',
-        transactionsUsed: 0,
-      };
-
-      await localDB.exchangeRates.set(eurRate);
-      await localDB.exchangeRates.set(btcRate);
+      await Promise.all([
+        db.exchangeRates.set({ date: today, from_currency: 'EUR', to_currency: 'USD', rate: 1.08, source: 'official', transactions_used: 0 }),
+        db.exchangeRates.set({ date: today, from_currency: 'BTC', to_currency: 'USD', rate: 65000, source: 'official', transactions_used: 0 }),
+      ]);
       setMessage('Tasas oficiales de EUR y BTC agregadas');
       loadRates();
     } catch (err) {
@@ -162,7 +67,7 @@ export default function RatesPage() {
   }
 
   const latestRates = rates.reduce((acc, r) => {
-    const key = `${r.from}→${r.to}`;
+    const key = `${r.from_currency}→${r.to_currency}`;
     if (!acc[key] || r.date > acc[key].date) {
       acc[key] = r;
     }
@@ -175,24 +80,54 @@ export default function RatesPage() {
 
       <div className="bg-surface rounded-xl p-4 space-y-3">
         <p className="text-sm text-text-muted">
-          La tasa VES/USD se calcula automáticamente promediando las transferencias P2P del día.
+          Registra las tasas de cambio manualmente o usa las tasas oficiales predefinidas.
         </p>
 
+        <div className="grid grid-cols-3 gap-2">
+          <select
+            value={manualFrom}
+            onChange={e => setManualFrom(e.target.value)}
+            className="bg-background border border-surface-light rounded-lg px-2 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            <option value="USD">USD</option>
+            <option value="USDT">USDT</option>
+            <option value="EUR">EUR</option>
+            <option value="BTC">BTC</option>
+          </select>
+          <span className="flex items-center justify-center text-text-muted text-sm">→</span>
+          <select
+            value={manualTo}
+            onChange={e => setManualTo(e.target.value)}
+            className="bg-background border border-surface-light rounded-lg px-2 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            <option value="VES">VES</option>
+            <option value="USD">USD</option>
+            <option value="USDT">USDT</option>
+          </select>
+        </div>
         <div className="flex gap-2">
+          <input
+            type="number"
+            step="0.01"
+            value={manualRate}
+            onChange={e => setManualRate(e.target.value)}
+            className="flex-1 bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
+            placeholder="Tasa (ej. 36.5)"
+          />
           <button
-            onClick={calculateDailyRate}
-            disabled={calculating}
-            className="flex-1 bg-primary hover:bg-primary-dark disabled:opacity-50 text-white text-sm font-medium rounded-lg py-2.5 transition-colors"
+            onClick={addManualRate}
+            className="bg-primary hover:bg-primary-dark text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
           >
-            {calculating ? 'Calculando...' : 'Calcular tasa P2P del día'}
-          </button>
-          <button
-            onClick={addOfficialRate}
-            className="bg-surface-light hover:bg-surface-light/80 text-text text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
-          >
-            Oficiales
+            Guardar
           </button>
         </div>
+
+        <button
+          onClick={addOfficialRates}
+          className="w-full bg-surface-light hover:bg-surface-light/80 text-text text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
+        >
+          Agregar tasas oficiales (EUR/BTC)
+        </button>
 
         {message && (
           <div className="bg-primary/10 border border-primary/30 rounded-lg px-3 py-2 text-xs text-primary">
@@ -201,24 +136,19 @@ export default function RatesPage() {
         )}
       </div>
 
-      {/* Latest Rates */}
       <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-          Últimas tasas
-        </h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Últimas tasas</h2>
         <div className="space-y-2">
           {Object.values(latestRates).length === 0 && (
-            <p className="text-text-muted text-sm text-center py-2">
-              Sin tasas registradas. Calcula o agrega una tasa.
-            </p>
+            <p className="text-text-muted text-sm text-center py-2">Sin tasas registradas.</p>
           )}
           {Object.entries(latestRates).map(([key, rate]) => (
             <div key={key} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
               <div>
-                <p className="text-sm font-medium">{rate.from} → {rate.to}</p>
+                <p className="text-sm font-medium">{rate.from_currency} → {rate.to_currency}</p>
                 <p className="text-xs text-text-muted">
                   {rate.date} · {rate.source === 'p2p_average' ? 'P2P promedio' : rate.source === 'official' ? 'Oficial' : 'Manual'}
-                  {rate.transactionsUsed > 0 && ` · ${rate.transactionsUsed} transacciones`}
+                  {rate.transactions_used > 0 && ` · ${rate.transactions_used} transacciones`}
                 </p>
               </div>
               <span className="font-bold text-lg">{rate.rate}</span>
@@ -227,19 +157,14 @@ export default function RatesPage() {
         </div>
       </div>
 
-      {/* Rate History */}
       <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-          Historial
-        </h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Historial</h2>
         <div className="space-y-1">
-          {rates.length === 0 && (
-            <p className="text-text-muted text-sm text-center py-2">Sin historial</p>
-          )}
+          {rates.length === 0 && <p className="text-text-muted text-sm text-center py-2">Sin historial</p>}
           {rates.slice(0, 20).map((rate, idx) => (
-            <div key={`${rate.date}-${rate.from}-${rate.to}-${idx}`} className="flex items-center justify-between py-1.5 border-b border-surface-light last:border-0 text-sm">
+            <div key={`${rate.date}-${rate.from_currency}-${rate.to_currency}-${idx}`} className="flex items-center justify-between py-1.5 border-b border-surface-light last:border-0 text-sm">
               <span className="text-text-muted">{rate.date}</span>
-              <span className="font-medium">{rate.from}→{rate.to}</span>
+              <span className="font-medium">{rate.from_currency}→{rate.to_currency}</span>
               <span className="font-semibold">{rate.rate}</span>
             </div>
           ))}

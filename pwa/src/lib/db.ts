@@ -1,153 +1,369 @@
-import { openDB, type IDBPDatabase } from 'idb';
+import { supabase } from '@/lib/supabase';
+import type {
+  Account, Transaction, Category, Budget, PiggyBank, Liability,
+  ExchangeRate, AccountAcquisition, HouseholdTask, MaintenanceLog,
+  VehicleRecord, BabyRecord, PendingTransaction,
+} from '@/types';
 
-const DB_NAME = 'lifeos';
-const DB_VERSION = 2;
-
-type StoreName = 'pendingTransactions' | 'exchangeRates' | 'householdTasks' | 'maintenanceLogs' | 'vehicleRecords' | 'babyRecords' | 'syncQueue' | 'accountAcquisition';
-
-interface SyncQueueItem {
-  id?: number;
-  action: 'create' | 'update' | 'delete';
-  endpoint: string;
-  body: Record<string, unknown>;
-  timestamp: number;
-  retries: number;
+async function getUser() {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user;
 }
 
-export interface AccountAcquisition {
-  accountId: string;
-  averageRate: number;
-  notes: string;
-  updatedAt: string;
-}
-
-let dbPromise: Promise<IDBPDatabase> | null = null;
-
-function getDb() {
-  if (!dbPromise) {
-    dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
-        if (!db.objectStoreNames.contains('pendingTransactions')) {
-          const store = db.createObjectStore('pendingTransactions', { keyPath: 'id' });
-          store.createIndex('confirmed', 'confirmed');
-          store.createIndex('synced', 'synced');
-          store.createIndex('date', 'date');
-        }
-        if (!db.objectStoreNames.contains('exchangeRates')) {
-          const store = db.createObjectStore('exchangeRates', { keyPath: ['date', 'from', 'to'] });
-          store.createIndex('date', 'date');
-        }
-        if (!db.objectStoreNames.contains('householdTasks')) {
-          db.createObjectStore('householdTasks', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('maintenanceLogs')) {
-          db.createObjectStore('maintenanceLogs', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('vehicleRecords')) {
-          db.createObjectStore('vehicleRecords', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('babyRecords')) {
-          db.createObjectStore('babyRecords', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('syncQueue')) {
-          db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
-        }
-        if (!db.objectStoreNames.contains('accountAcquisition')) {
-          db.createObjectStore('accountAcquisition', { keyPath: 'accountId' });
-        }
-      },
-    });
-  }
-  return dbPromise;
-}
-
-async function getAll<T>(store: StoreName): Promise<T[]> {
-  const db = await getDb();
-  return db.getAll(store);
-}
-
-async function get<T>(store: StoreName, key: IDBValidKey): Promise<T | undefined> {
-  const db = await getDb();
-  return db.get(store, key);
-}
-
-async function set<T>(store: StoreName, key: IDBValidKey, value: T): Promise<void> {
-  const db = await getDb();
-  await db.put(store, value);
-}
-
-async function del(store: StoreName, key: IDBValidKey): Promise<void> {
-  const db = await getDb();
-  await db.delete(store, key);
-}
-
-async function clear(store: StoreName): Promise<void> {
-  const db = await getDb();
-  await db.clear(store);
-}
-
-export const localDB = {
-  pendingTransactions: {
-    getAll: () => getAll<import('@/types').PendingTransaction>('pendingTransactions'),
-    get: (id: string) => get<import('@/types').PendingTransaction>('pendingTransactions', id),
-    set: (tx: import('@/types').PendingTransaction) => set('pendingTransactions', tx.id, tx),
-    delete: (id: string) => del('pendingTransactions', id),
-    getPending: async () => {
-      const db = await getDb();
-      const index = db.transaction('pendingTransactions').store.index('confirmed');
-      return index.getAll(IDBKeyRange.only(false));
+export const db = {
+  // ─── ACCOUNTS ──────────────────────────────────────────────
+  accounts: {
+    list: async (params?: { type?: string }): Promise<Account[]> => {
+      let q = supabase.from('accounts').select('*').eq('active', true).order('name');
+      if (params?.type) q = q.eq('type', params.type);
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
     },
-    getUnsynced: async () => {
-      const db = await getDb();
-      const index = db.transaction('pendingTransactions').store.index('synced');
-      return index.getAll(IDBKeyRange.only(false));
+    get: async (id: string): Promise<Account | null> => {
+      const { data, error } = await supabase.from('accounts').select('*').eq('id', id).single();
+      if (error) throw error;
+      return data;
+    },
+    transactions: async (id: string, params?: { limit?: number; start?: string; end?: string }): Promise<Transaction[]> => {
+      let q = supabase
+        .from('transactions')
+        .select('*')
+        .or(`source_account_id.eq.${id},destination_account_id.eq.${id}`)
+        .order('date', { ascending: false });
+      if (params?.limit) q = q.limit(params.limit);
+      if (params?.start) q = q.gte('date', params.start);
+      if (params?.end) q = q.lte('date', params.end);
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
+    },
+    create: async (account: Partial<Account>): Promise<Account> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('accounts').insert({ ...account, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    update: async (id: string, updates: Partial<Account>): Promise<Account> => {
+      const { data, error } = await supabase.from('accounts').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('accounts').delete().eq('id', id);
+      if (error) throw error;
     },
   },
+
+  // ─── TRANSACTIONS ──────────────────────────────────────────
+  transactions: {
+    list: async (params?: { limit?: number; start?: string; end?: string; type?: string }): Promise<Transaction[]> => {
+      let q = supabase.from('transactions').select('*').order('date', { ascending: false });
+      if (params?.limit) q = q.limit(params.limit);
+      if (params?.start) q = q.gte('date', params.start);
+      if (params?.end) q = q.lte('date', params.end);
+      if (params?.type) q = q.eq('type', params.type);
+      const { data, error } = await q;
+      if (error) throw error;
+      // Enrich with category name and account names
+      const enriched = await Promise.all((data || []).map(async (tx) => {
+        let categoryName: string | null = null;
+        let sourceName: string | null = null;
+        let destName: string | null = null;
+        if (tx.category_id) {
+          const { data: cat } = await supabase.from('categories').select('name').eq('id', tx.category_id).single();
+          categoryName = cat?.name || null;
+        }
+        if (tx.source_account_id) {
+          const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.source_account_id).single();
+          sourceName = acc?.name || null;
+        }
+        if (tx.destination_account_id) {
+          const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.destination_account_id).single();
+          destName = acc?.name || null;
+        }
+        return { ...tx, category_name: categoryName, source_name: sourceName, destination_name: destName };
+      }));
+      return enriched;
+    },
+    get: async (id: string): Promise<Transaction | null> => {
+      const { data, error } = await supabase.from('transactions').select('*').eq('id', id).single();
+      if (error) throw error;
+      return data;
+    },
+    create: async (tx: Partial<Transaction>): Promise<Transaction> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('transactions').insert({ ...tx, user_id: user?.id }).select().single();
+      if (error) throw error;
+      // Update account balance
+      if (tx.source_account_id && (tx.type === 'withdrawal' || tx.type === 'transfer')) {
+        await supabase.rpc('decrement_balance', { acc_id: tx.source_account_id, amount: Math.abs(tx.amount || 0) });
+      }
+      if (tx.destination_account_id && (tx.type === 'deposit' || tx.type === 'transfer')) {
+        await supabase.rpc('increment_balance', { acc_id: tx.destination_account_id, amount: Math.abs(tx.amount || 0) });
+      }
+      return data;
+    },
+    update: async (id: string, updates: Partial<Transaction>): Promise<Transaction> => {
+      const { data, error } = await supabase.from('transactions').update(updates).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('transactions').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── CATEGORIES ────────────────────────────────────────────
+  categories: {
+    list: async (): Promise<Category[]> => {
+      const { data, error } = await supabase.from('categories').select('*').order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    get: async (id: string): Promise<Category | null> => {
+      const { data, error } = await supabase.from('categories').select('*').eq('id', id).single();
+      if (error) throw error;
+      return data;
+    },
+    create: async (name: string): Promise<Category> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('categories').insert({ name, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('categories').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── BUDGETS ───────────────────────────────────────────────
+  budgets: {
+    list: async (): Promise<Budget[]> => {
+      const { data, error } = await supabase.from('budgets').select('*').order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    get: async (id: string): Promise<Budget | null> => {
+      const { data, error } = await supabase.from('budgets').select('*').eq('id', id).single();
+      if (error) throw error;
+      return data;
+    },
+  },
+
+  // ─── PIGGY BANKS ──────────────────────────────────────────
+  piggyBanks: {
+    list: async (): Promise<PiggyBank[]> => {
+      const { data, error } = await supabase.from('piggy_banks').select('*').order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    get: async (id: string): Promise<PiggyBank | null> => {
+      const { data, error } = await supabase.from('piggy_banks').select('*').eq('id', id).single();
+      if (error) throw error;
+      return data;
+    },
+    create: async (jar: Partial<PiggyBank>): Promise<PiggyBank> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('piggy_banks').insert({ ...jar, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    update: async (id: string, updates: Partial<PiggyBank>): Promise<PiggyBank> => {
+      const { data, error } = await supabase.from('piggy_banks').update(updates).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+  },
+
+  // ─── LIABILITIES ───────────────────────────────────────────
+  liabilities: {
+    list: async (): Promise<Liability[]> => {
+      const { data, error } = await supabase.from('liabilities').select('*').order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    get: async (id: string): Promise<Liability | null> => {
+      const { data, error } = await supabase.from('liabilities').select('*').eq('id', id).single();
+      if (error) throw error;
+      return data;
+    },
+  },
+
+  // ─── EXCHANGE RATES ───────────────────────────────────────
   exchangeRates: {
-    getAll: () => getAll<import('@/types').ExchangeRate>('exchangeRates'),
-    get: (date: string, from: string, to: string) =>
-      get<import('@/types').ExchangeRate>('exchangeRates', [date, from, to]),
-    set: (rate: import('@/types').ExchangeRate) =>
-      set('exchangeRates', [rate.date, rate.from, rate.to], rate),
-    getByDate: async (date: string) => {
-      const db = await getDb();
-      const index = db.transaction('exchangeRates').store.index('date');
-      return index.getAll(date);
+    getAll: async (): Promise<ExchangeRate[]> => {
+      const { data, error } = await supabase.from('exchange_rates').select('*').order('date', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    getByDate: async (date: string): Promise<ExchangeRate[]> => {
+      const { data, error } = await supabase.from('exchange_rates').select('*').eq('date', date);
+      if (error) throw error;
+      return data || [];
+    },
+    set: async (rate: Omit<ExchangeRate, 'id' | 'user_id' | 'created_at'>): Promise<ExchangeRate> => {
+      const user = await getUser();
+      const { data, error } = await supabase
+        .from('exchange_rates')
+        .upsert({ ...rate, user_id: user?.id }, { onConflict: 'user_id,date,from_currency,to_currency' })
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
     },
   },
-  householdTasks: {
-    getAll: () => getAll<import('@/types').HouseholdTask>('householdTasks'),
-    set: (task: import('@/types').HouseholdTask) => set('householdTasks', task.id, task),
-    delete: (id: string) => del('householdTasks', id),
-  },
-  maintenanceLogs: {
-    getAll: () => getAll<import('@/types').MaintenanceLog>('maintenanceLogs'),
-    set: (log: import('@/types').MaintenanceLog) => set('maintenanceLogs', log.id, log),
-    delete: (id: string) => del('maintenanceLogs', id),
-  },
-  vehicleRecords: {
-    getAll: () => getAll<import('@/types').VehicleRecord>('vehicleRecords'),
-    set: (record: import('@/types').VehicleRecord) => set('vehicleRecords', record.id, record),
-    delete: (id: string) => del('vehicleRecords', id),
-  },
-  babyRecords: {
-    getAll: () => getAll<import('@/types').BabyRecord>('babyRecords'),
-    set: (record: import('@/types').BabyRecord) => set('babyRecords', record.id, record),
-    delete: (id: string) => del('babyRecords', id),
-  },
-  syncQueue: {
-    getAll: () => getAll<SyncQueueItem>('syncQueue'),
-    add: (item: Omit<SyncQueueItem, 'id' | 'timestamp'>) => {
-      const dbPromise = getDb();
-      return dbPromise.then(db => db.add('syncQueue', { ...item, timestamp: Date.now() }));
-    },
-    remove: (id: number) => del('syncQueue', id),
-    clear: () => clear('syncQueue'),
-  },
+
+  // ─── ACCOUNT ACQUISITION ──────────────────────────────────
   accountAcquisition: {
-    getAll: () => getAll<AccountAcquisition>('accountAcquisition'),
-    get: (id: string) => get<AccountAcquisition>('accountAcquisition', id),
-    set: (acq: AccountAcquisition) => set('accountAcquisition', acq.accountId, acq),
-    delete: (id: string) => del('accountAcquisition', id),
+    getAll: async (): Promise<AccountAcquisition[]> => {
+      const { data, error } = await supabase.from('account_acquisition').select('*');
+      if (error) throw error;
+      return data || [];
+    },
+    get: async (accountId: string): Promise<AccountAcquisition | null> => {
+      const { data, error } = await supabase.from('account_acquisition').select('*').eq('account_id', accountId).single();
+      if (error && error.code !== 'PGRST116') throw error;
+      return data;
+    },
+    set: async (acq: { account_id: string; average_rate: number; notes: string }): Promise<AccountAcquisition> => {
+      const user = await getUser();
+      const { data, error } = await supabase
+        .from('account_acquisition')
+        .upsert({ ...acq, user_id: user?.id, updated_at: new Date().toISOString() }, { onConflict: 'user_id,account_id' })
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    },
+  },
+
+  // ─── HOUSEHOLD TASKS ──────────────────────────────────────
+  householdTasks: {
+    getAll: async (): Promise<HouseholdTask[]> => {
+      const { data, error } = await supabase.from('household_tasks').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    set: async (task: Partial<HouseholdTask>): Promise<HouseholdTask> => {
+      const user = await getUser();
+      if (task.id) {
+        const { data, error } = await supabase.from('household_tasks').update(task).eq('id', task.id).select().single();
+        if (error) throw error;
+        return data;
+      }
+      const { data, error } = await supabase.from('household_tasks').insert({ ...task, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('household_tasks').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── MAINTENANCE LOGS ─────────────────────────────────────
+  maintenanceLogs: {
+    getAll: async (): Promise<MaintenanceLog[]> => {
+      const { data, error } = await supabase.from('maintenance_logs').select('*').order('date', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    set: async (log: Partial<MaintenanceLog>): Promise<MaintenanceLog> => {
+      const user = await getUser();
+      if (log.id) {
+        const { data, error } = await supabase.from('maintenance_logs').update(log).eq('id', log.id).select().single();
+        if (error) throw error;
+        return data;
+      }
+      const { data, error } = await supabase.from('maintenance_logs').insert({ ...log, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('maintenance_logs').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── VEHICLE RECORDS ──────────────────────────────────────
+  vehicleRecords: {
+    getAll: async (): Promise<VehicleRecord[]> => {
+      const { data, error } = await supabase.from('vehicle_records').select('*').order('date', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    set: async (record: Partial<VehicleRecord>): Promise<VehicleRecord> => {
+      const user = await getUser();
+      if (record.id) {
+        const { data, error } = await supabase.from('vehicle_records').update(record).eq('id', record.id).select().single();
+        if (error) throw error;
+        return data;
+      }
+      const { data, error } = await supabase.from('vehicle_records').insert({ ...record, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('vehicle_records').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── BABY RECORDS ─────────────────────────────────────────
+  babyRecords: {
+    getAll: async (): Promise<BabyRecord[]> => {
+      const { data, error } = await supabase.from('baby_records').select('*').order('date', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    set: async (record: Partial<BabyRecord>): Promise<BabyRecord> => {
+      const user = await getUser();
+      if (record.id) {
+        const { data, error } = await supabase.from('baby_records').update(record).eq('id', record.id).select().single();
+        if (error) throw error;
+        return data;
+      }
+      const { data, error } = await supabase.from('baby_records').insert({ ...record, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('baby_records').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── PENDING TRANSACTIONS (kept in Supabase) ──────────────
+  pendingTransactions: {
+    getAll: async (): Promise<PendingTransaction[]> => {
+      // Pending transactions are stored in localStorage (simple, no auth needed)
+      try {
+        const raw = localStorage.getItem('lifeos_pending_txs');
+        return raw ? JSON.parse(raw) : [];
+      } catch { return []; }
+    },
+    set: async (tx: PendingTransaction): Promise<void> => {
+      const all = await db.pendingTransactions.getAll();
+      const idx = all.findIndex(t => t.id === tx.id);
+      if (idx >= 0) all[idx] = tx;
+      else all.unshift(tx);
+      localStorage.setItem('lifeos_pending_txs', JSON.stringify(all));
+    },
+    delete: async (id: string): Promise<void> => {
+      const all = await db.pendingTransactions.getAll();
+      localStorage.setItem('lifeos_pending_txs', JSON.stringify(all.filter(t => t.id !== id)));
+    },
+  },
+
+  // ─── SUMMARY ──────────────────────────────────────────────
+  summary: {
+    netWorth: async (): Promise<number> => {
+      const { data, error } = await supabase.from('accounts').select('current_balance, currency').eq('active', true).eq('include_in_net_worth', true);
+      if (error) throw error;
+      return (data || []).reduce((sum: number, a: any) => sum + parseFloat(a.current_balance || '0'), 0);
+    },
   },
 };

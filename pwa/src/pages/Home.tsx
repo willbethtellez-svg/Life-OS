@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
-import { localDB } from '@/lib/db';
-import { formatCurrency, generateId } from '@/lib/utils';
+import { db } from '@/lib/db';
+import { formatCurrency } from '@/lib/utils';
 import { format } from 'date-fns';
-import type { HouseholdTask, MaintenanceLog, CurrencyCode } from '@/types';
+import type { HouseholdTask, CurrencyCode } from '@/types';
 
 type Tab = 'tasks' | 'maintenance';
 
 export default function HomePage() {
   const [tab, setTab] = useState<Tab>('tasks');
   const [tasks, setTasks] = useState<HouseholdTask[]>([]);
-  const [logs, setLogs] = useState<MaintenanceLog[]>([]);
   const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState({
@@ -22,27 +21,21 @@ export default function HomePage() {
   });
 
   useEffect(() => {
-    localDB.householdTasks.getAll().then(setTasks);
-    localDB.maintenanceLogs.getAll().then(setLogs);
+    db.householdTasks.getAll().then(setTasks);
   }, []);
 
   async function addTask(e: React.FormEvent) {
     e.preventDefault();
-    const task: HouseholdTask = {
-      id: generateId(),
+    const task = await db.householdTasks.set({
       title: form.title,
       description: form.description,
       date: form.date,
       completed: false,
-      estimatedCost: parseFloat(form.estimatedCost) || 0,
+      estimated_cost: parseFloat(form.estimatedCost) || 0,
       currency: 'VES' as CurrencyCode,
-      jarId: null,
-      jarName: null,
       category: form.category,
       notes: form.notes,
-      createdAt: new Date().toISOString(),
-    };
-    await localDB.householdTasks.set(task);
+    });
     setTasks(prev => [task, ...prev]);
     setShowForm(false);
     setForm({ title: '', description: '', date: new Date().toISOString().split('T')[0], estimatedCost: '', category: 'otro', notes: '' });
@@ -51,17 +44,16 @@ export default function HomePage() {
   async function toggleTask(id: string) {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
-    const updated = { ...task, completed: !task.completed };
-    await localDB.householdTasks.set(updated);
+    const updated = await db.householdTasks.set({ ...task, completed: !task.completed });
     setTasks(prev => prev.map(t => t.id === id ? updated : t));
   }
 
   async function deleteTask(id: string) {
-    await localDB.householdTasks.delete(id);
+    await db.householdTasks.delete(id);
     setTasks(prev => prev.filter(t => t.id !== id));
   }
 
-  const totalCost = tasks.filter(t => !t.completed).reduce((s, t) => s + t.estimatedCost, 0);
+  const totalCost = tasks.filter(t => !t.completed).reduce((s, t) => s + t.estimated_cost, 0);
   const upcoming = tasks.filter(t => !t.completed).sort((a, b) => a.date.localeCompare(b.date));
 
   return (
@@ -162,12 +154,9 @@ export default function HomePage() {
           {upcoming.length > 0 && (
             <div className="bg-surface rounded-xl p-4">
               <p className="text-text-muted text-xs uppercase tracking-wide">Costo pendiente total</p>
-              <p className="text-2xl font-bold text-warning mt-1">
-                {formatCurrency(totalCost)}
-              </p>
+              <p className="text-2xl font-bold text-warning mt-1">{formatCurrency(totalCost)}</p>
             </div>
           )}
-
           <div className="space-y-2">
             {tasks.length === 0 && (
               <div className="text-center py-8 text-text-muted">
@@ -175,7 +164,7 @@ export default function HomePage() {
                 <p className="text-sm">No hay tareas del hogar</p>
               </div>
             )}
-            {tasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((task) => (
+            {tasks.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).map((task) => (
               <div
                 key={task.id}
                 className={`bg-surface rounded-xl p-4 border-l-4 ${task.completed ? 'border-secondary/50' : 'border-warning'}`}
@@ -197,25 +186,16 @@ export default function HomePage() {
                     <p className={`font-medium ${task.completed ? 'line-through text-text-muted' : ''}`}>
                       {task.title}
                     </p>
-                    {task.description && (
-                      <p className="text-sm text-text-muted mt-0.5">{task.description}</p>
-                    )}
+                    {task.description && <p className="text-sm text-text-muted mt-0.5">{task.description}</p>}
                     <div className="flex flex-wrap gap-2 mt-1.5">
                       <span className="text-xs text-text-muted">{format(new Date(task.date), 'dd/MM/yy')}</span>
                       <span className="text-xs bg-surface-light px-2 py-0.5 rounded-full">{task.category}</span>
-                      {task.estimatedCost > 0 && (
-                        <span className="text-xs text-warning font-medium">
-                          {formatCurrency(task.estimatedCost)}
-                        </span>
+                      {task.estimated_cost > 0 && (
+                        <span className="text-xs text-warning font-medium">{formatCurrency(task.estimated_cost)}</span>
                       )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => deleteTask(task.id)}
-                    className="text-text-muted hover:text-danger text-sm transition-colors"
-                  >
-                    ×
-                  </button>
+                  <button onClick={() => deleteTask(task.id)} className="text-text-muted hover:text-danger text-sm transition-colors">×</button>
                 </div>
               </div>
             ))}
@@ -225,11 +205,9 @@ export default function HomePage() {
 
       {tab === 'maintenance' && (
         <div className="space-y-2">
-          {logs.length === 0 && (
-            <div className="text-center py-8 text-text-muted">
-              <p className="text-sm">Registros de mantenimiento próximamente</p>
-            </div>
-          )}
+          <div className="text-center py-8 text-text-muted">
+            <p className="text-sm">Registros de mantenimiento próximamente</p>
+          </div>
         </div>
       )}
     </div>

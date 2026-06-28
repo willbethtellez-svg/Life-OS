@@ -14,7 +14,7 @@
     "react-router-dom": "^7.0.0",
     "recharts": "^2.15.0",
     "date-fns": "^4.1.0",
-    "idb": "^8.0.1"
+    "@supabase/supabase-js": "^2.49.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api } from '@/lib/firefly-api';
+import { db } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
 
 export default function LoansPage() {
@@ -9,8 +9,8 @@ export default function LoansPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.liabilities.list();
-      setLiabilities(Array.isArray(res) ? res : res.data || []);
+      const list = await db.liabilities.list();
+      setLiabilities(list);
     } catch (err) {
       console.error(err);
     } finally {
@@ -21,8 +21,7 @@ export default function LoansPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const totalDebt = liabilities.reduce((sum: number, l: any) => {
-    const attrs = l.attributes || l;
-    return sum + parseFloat(attrs.current_balance || attrs.amount || '0');
+    return sum + parseFloat(l.current_balance || l.amount || '0');
   }, 0);
 
   return (
@@ -45,30 +44,25 @@ export default function LoansPage() {
           <div className="text-center py-8 text-text-muted">
             <p className="text-lg mb-1">⊡</p>
             <p className="text-sm">No hay préstamos o deudas registradas</p>
-            <p className="text-xs mt-1">Créalos desde Firefly III (Liabilities)</p>
           </div>
         ) : (
           liabilities.map((liab: any) => {
-            const attrs = liab.attributes || liab;
-            const balance = parseFloat(attrs.current_balance || attrs.amount || '0');
-            const currency = attrs.currency_code || 'USD';
+            const balance = parseFloat(liab.current_balance || liab.amount || '0');
+            const currency = liab.currency || 'USD';
             return (
-              <div
-                key={liab.id}
-                className="bg-surface rounded-xl p-4"
-              >
+              <div key={liab.id} className="bg-surface rounded-xl p-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium">{attrs.name}</p>
-                    <p className="text-xs text-text-muted mt-0.5">{attrs.type} · {currency}</p>
+                    <p className="font-medium">{liab.name}</p>
+                    <p className="text-xs text-text-muted mt-0.5">{liab.type} · {currency}</p>
                   </div>
                   <p className={`font-bold text-lg ${balance >= 0 ? 'text-secondary' : 'text-danger'}`}>
                     {formatCurrency(balance, currency)}
                   </p>
                 </div>
-                {attrs.interest && parseFloat(attrs.interest) > 0 && (
+                {liab.interest_rate > 0 && (
                   <p className="text-xs text-text-muted mt-2">
-                    Interés: {attrs.interest}% · Vence: {attrs.due_date || 'Sin fecha'}
+                    Interés: {liab.interest_rate}% · Vence: {liab.due_date || 'Sin fecha'}
                   </p>
                 )}
               </div>

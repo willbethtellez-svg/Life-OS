@@ -3,17 +3,15 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
-import { format, subMonths, startOfMonth, endOfMonth, parseISO } from "date-fns";
+import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
 import { es } from "date-fns/locale";
-import { api } from "@/lib/firefly-api";
+import { db } from "@/lib/db";
 import { formatCurrency } from "@/lib/utils";
-import { useAuth } from "@/lib/auth-context";
 import { Link } from "react-router-dom";
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
 
 export default function DashboardPage() {
-  const { token, baseUrl } = useAuth();
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [recentTxs, setRecentTxs] = useState<any[]>([]);
@@ -34,36 +32,30 @@ export default function DashboardPage() {
       const start = startOfMonth(subMonths(now, months)).toISOString().split("T")[0];
       const end = endOfMonth(now).toISOString().split("T")[0];
 
-      const accRes = await api.accounts.list({ type: "asset" });
-      const accountsList = Array.isArray(accRes) ? accRes : accRes.data || [];
+      const accountsList = await db.accounts.list({ type: "asset" });
       setAccounts(accountsList);
       setNetWorth(
-        accountsList.reduce((sum: number, a: any) => {
-          const attrs = a.attributes || a;
-          return sum + parseFloat(attrs.current_balance || "0");
-        }, 0)
+        accountsList.reduce((sum: number, a: any) => sum + parseFloat(a.current_balance || "0"), 0)
       );
 
-      const txRes = await api.transactions.list({ start, end, limit: 50 });
-      const txList = Array.isArray(txRes) ? txRes : txRes.data || [];
+      const txList = await db.transactions.list({ start, end, limit: 50 });
       setRecentTxs(txList.slice(0, 20));
 
       const income = txList
-        .filter((t: any) => (t.attributes || t).type === "deposit")
-        .reduce((s: number, t: any) => s + Math.abs(parseFloat((t.attributes || t).amount || "0")), 0);
+        .filter((t: any) => t.type === "deposit")
+        .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
       const expense = txList
-        .filter((t: any) => (t.attributes || t).type === "withdrawal")
-        .reduce((s: number, t: any) => s + Math.abs(parseFloat((t.attributes || t).amount || "0")), 0);
+        .filter((t: any) => t.type === "withdrawal")
+        .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
       setMonthlyIncome(income);
       setMonthlyExpense(expense);
 
       const cats: Record<string, number> = {};
       txList
-        .filter((t: any) => (t.attributes || t).type === "withdrawal")
+        .filter((t: any) => t.type === "withdrawal")
         .forEach((t: any) => {
-          const attrs = t.attributes || t;
-          const catName = attrs.category_name || "Sin categoría";
-          cats[catName] = (cats[catName] || 0) + Math.abs(parseFloat(attrs.amount || "0"));
+          const catName = t.category_name || "Sin categoría";
+          cats[catName] = (cats[catName] || 0) + Math.abs(parseFloat(t.amount || "0"));
         });
       setCategoryData(
         Object.entries(cats)
@@ -76,28 +68,27 @@ export default function DashboardPage() {
         const mStart = startOfMonth(subMonths(now, i));
         const mEnd = endOfMonth(subMonths(now, i));
         const label = format(mStart, "MMM", { locale: es });
-        const mTxRes = await api.transactions.list({
+        const mTxList = await db.transactions.list({
           start: mStart.toISOString().split("T")[0],
           end: mEnd.toISOString().split("T")[0],
           limit: 200,
         });
-        const mTxList = Array.isArray(mTxRes) ? mTxRes : mTxRes.data || [];
         const mIncome = mTxList
-          .filter((t: any) => (t.attributes || t).type === "deposit")
-          .reduce((s: number, t: any) => s + Math.abs(parseFloat((t.attributes || t).amount || "0")), 0);
+          .filter((t: any) => t.type === "deposit")
+          .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
         const mExpense = mTxList
-          .filter((t: any) => (t.attributes || t).type === "withdrawal")
-          .reduce((s: number, t: any) => s + Math.abs(parseFloat((t.attributes || t).amount || "0")), 0);
+          .filter((t: any) => t.type === "withdrawal")
+          .reduce((s: number, t: any) => s + Math.abs(parseFloat(t.amount || "0")), 0);
         trendData.push({ month: label, income: Math.round(mIncome * 100) / 100, expense: Math.round(mExpense * 100) / 100 });
       }
       setMonthlyTrend(trendData);
     } catch (err) {
       console.error(err);
-      setError("Error al cargar datos. Verifica la conexión con Firefly III.");
+      setError("Error al cargar datos.");
     } finally {
       setLoading(false);
     }
-  }, [period, token, baseUrl]);
+  }, [period]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -192,17 +183,15 @@ export default function DashboardPage() {
         <div className="space-y-2">
           {recentTxs.length === 0 && <p className="text-text-muted text-sm text-center py-4">No hay transacciones</p>}
           {recentTxs.slice(0, 10).map((tx: any) => {
-            const attrs = tx.attributes || tx;
-            const amount = parseFloat(attrs.amount || "0");
-            const isNegative = attrs.type === "withdrawal";
-            const date = attrs.date || attrs.createdAt;
+            const amount = parseFloat(tx.amount || "0");
+            const isNegative = tx.type === "withdrawal";
             return (
               <div key={tx.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{attrs.description || "Sin descripción"}</p>
+                  <p className="text-sm font-medium truncate">{tx.description || "Sin descripción"}</p>
                   <p className="text-xs text-text-muted">
-                    {date ? format(parseISO(date), "dd/MM/yy") : ""}
-                    {attrs.category_name && ` · ${attrs.category_name}`}
+                    {tx.date}
+                    {tx.category_name && ` · ${tx.category_name}`}
                   </p>
                 </div>
                 <span className={`text-sm font-semibold ml-3 ${isNegative ? "text-danger" : "text-secondary"}`}>
