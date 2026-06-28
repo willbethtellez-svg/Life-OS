@@ -14,25 +14,15 @@ async function getUser() {
 async function toUSD(amount: number, currency: string, date?: string): Promise<number> {
   if (currency === 'USD' || currency === 'USDT') return amount;
   const txDate = date || new Date().toISOString().split('T')[0];
+  // Buscar tasa donde to_currency = currency (ej: USDT → VES, rate=50 → 100/50=2 USD)
   const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
-  // Buscar tasa directa (currency → USD) o inversa (USD/USDT → currency)
-  let rate = rates?.find(r => r.from_currency === currency && r.to_currency === 'USD')?.rate;
-  if (!rate) {
-    const inverse = rates?.find(r => r.from_currency === 'USD' && r.to_currency === currency)?.rate
-      || rates?.find(r => r.from_currency === 'USDT' && r.to_currency === currency)?.rate;
-    if (inverse) rate = 1 / inverse;
-  }
+  let rate = rates?.find(r => r.to_currency === currency)?.rate;
   if (!rate) {
     const { data: allRates } = await supabase.from('exchange_rates').select('*').order('date', { ascending: false });
-    rate = allRates?.find(r => r.from_currency === currency && r.to_currency === 'USD')?.rate;
-    if (!rate) {
-      const inverse = allRates?.find(r => r.from_currency === 'USD' && r.to_currency === currency)?.rate
-        || allRates?.find(r => r.from_currency === 'USDT' && r.to_currency === currency)?.rate;
-      if (inverse) rate = 1 / inverse;
-    }
+    rate = allRates?.find(r => r.to_currency === currency)?.rate;
   }
   if (!rate) return amount;
-  return amount * rate;
+  return amount / rate;
 }
 
 // Convierte entre dos monedas (para jarras)
@@ -40,15 +30,13 @@ async function convertCurrency(amount: number, from: string, to: string, date?: 
   if (from === to) return amount;
   const usdAmount = await toUSD(amount, from, date);
   if (to === 'USD' || to === 'USDT') return usdAmount;
-  // Si el destino no es USD, necesitamos la tasa de USD→destino
+  // Convertir USD → to: buscar tasa donde to_currency = to, multiplicar
   const txDate = date || new Date().toISOString().split('T')[0];
   const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
-  let rate = rates?.find(r => r.from_currency === 'USD' && r.to_currency === to)?.rate
-    || rates?.find(r => r.from_currency === 'USDT' && r.to_currency === to)?.rate;
+  let rate = rates?.find(r => r.to_currency === to)?.rate;
   if (!rate) {
     const { data: allRates } = await supabase.from('exchange_rates').select('*').order('date', { ascending: false });
-    rate = allRates?.find(r => r.from_currency === 'USD' && r.to_currency === to)?.rate
-      || allRates?.find(r => r.from_currency === 'USDT' && r.to_currency === to)?.rate;
+    rate = allRates?.find(r => r.to_currency === to)?.rate;
   }
   if (!rate) return amount;
   return usdAmount * rate;
