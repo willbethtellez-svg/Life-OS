@@ -227,3 +227,35 @@ CREATE POLICY "Users can manage their own household_tasks" ON household_tasks FO
 CREATE POLICY "Users can manage their own maintenance_logs" ON maintenance_logs FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can manage their own vehicle_records" ON vehicle_records FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can manage their own baby_records" ON baby_records FOR ALL USING (auth.uid() = user_id);
+
+-- ============================================================
+-- RPC FUNCTIONS FOR BALANCE UPDATES
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION increment_balance(acc_id UUID, amt NUMERIC)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE accounts SET current_balance = current_balance + amt, updated_at = now() WHERE id = acc_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION decrement_balance(acc_id UUID, amt NUMERIC)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE accounts SET current_balance = current_balance - amt, updated_at = now() WHERE id = acc_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION increment_jar(jar_id UUID, amt NUMERIC)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE piggy_banks SET current_amount = current_amount + amt WHERE id = jar_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION decrement_jar(jar_id UUID, amt NUMERIC)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE piggy_banks SET current_amount = current_amount - amt WHERE id = jar_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

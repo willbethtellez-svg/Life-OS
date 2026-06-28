@@ -95,14 +95,126 @@ export const db = {
       const user = await getUser();
       const { data, error } = await supabase.from('transactions').insert({ ...tx, user_id: user?.id }).select().single();
       if (error) throw error;
+
+      const amount = parseFloat(String(tx.amount || 0));
+      const type = tx.type;
+      const sourceId = tx.source_account_id || null;
+      const destId = tx.destination_account_id || null;
+      const piggyId = tx.piggy_bank_id || null;
+      const destPiggyId = tx.destination_piggy_bank_id || null;
+
+      // Update account balances
+      if (type === 'withdrawal' && sourceId) {
+        await supabase.rpc('decrement_balance', { acc_id: sourceId, amt: amount });
+      } else if (type === 'deposit' && destId) {
+        await supabase.rpc('increment_balance', { acc_id: destId, amt: amount });
+      } else if (type === 'transfer') {
+        if (sourceId) await supabase.rpc('decrement_balance', { acc_id: sourceId, amt: amount });
+        if (destId && tx.foreign_amount) {
+          await supabase.rpc('increment_balance', { acc_id: destId, amt: parseFloat(String(tx.foreign_amount)) });
+        } else if (destId) {
+          await supabase.rpc('increment_balance', { acc_id: destId, amt: amount });
+        }
+      }
+
+      // Update jar amounts
+      if (piggyId && (type === 'withdrawal' || type === 'transfer')) {
+        await supabase.rpc('decrement_jar', { jar_id: piggyId, amt: amount });
+      }
+      if (destPiggyId && type === 'transfer') {
+        const jarAmt = tx.foreign_amount ? parseFloat(String(tx.foreign_amount)) : amount;
+        await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+      }
+
       return data;
     },
     update: async (id: string, updates: Partial<Transaction>): Promise<Transaction> => {
+      // Get original transaction to reverse its effects
+      const { data: orig } = await supabase.from('transactions').select('*').eq('id', id).single();
+      if (orig) {
+        const origAmt = parseFloat(String(orig.amount || 0));
+        // Reverse original account changes
+        if (orig.type === 'withdrawal' && orig.source_account_id) {
+          await supabase.rpc('increment_balance', { acc_id: orig.source_account_id, amt: origAmt });
+        } else if (orig.type === 'deposit' && orig.destination_account_id) {
+          await supabase.rpc('decrement_balance', { acc_id: orig.destination_account_id, amt: origAmt });
+        } else if (orig.type === 'transfer') {
+          if (orig.source_account_id) await supabase.rpc('increment_balance', { acc_id: orig.source_account_id, amt: origAmt });
+          if (orig.destination_account_id) {
+            const origForeign = orig.foreign_amount ? parseFloat(String(orig.foreign_amount)) : origAmt;
+            await supabase.rpc('decrement_balance', { acc_id: orig.destination_account_id, amt: origForeign });
+          }
+        }
+        // Reverse original jar changes
+        if (orig.piggy_bank_id && (orig.type === 'withdrawal' || orig.type === 'transfer')) {
+          await supabase.rpc('increment_jar', { jar_id: orig.piggy_bank_id, amt: origAmt });
+        }
+        if (orig.destination_piggy_bank_id && orig.type === 'transfer') {
+          const origForeign = orig.foreign_amount ? parseFloat(String(orig.foreign_amount)) : origAmt;
+          await supabase.rpc('decrement_jar', { jar_id: orig.destination_piggy_bank_id, amt: origForeign });
+        }
+      }
+
       const { data, error } = await supabase.from('transactions').update(updates).eq('id', id).select().single();
       if (error) throw error;
+
+      // Apply new transaction effects
+      const amount = parseFloat(String(updates.amount ?? orig?.amount ?? 0));
+      const type = updates.type ?? orig?.type;
+      const sourceId = updates.source_account_id ?? orig?.source_account_id;
+      const destId = updates.destination_account_id ?? orig?.destination_account_id;
+      const piggyId = updates.piggy_bank_id ?? orig?.piggy_bank_id;
+      const destPiggyId = updates.destination_piggy_bank_id ?? orig?.destination_piggy_bank_id;
+      const foreignAmount = updates.foreign_amount ?? orig?.foreign_amount;
+
+      if (type === 'withdrawal' && sourceId) {
+        await supabase.rpc('decrement_balance', { acc_id: sourceId, amt: amount });
+      } else if (type === 'deposit' && destId) {
+        await supabase.rpc('increment_balance', { acc_id: destId, amt: amount });
+      } else if (type === 'transfer') {
+        if (sourceId) await supabase.rpc('decrement_balance', { acc_id: sourceId, amt: amount });
+        if (destId && foreignAmount) {
+          await supabase.rpc('increment_balance', { acc_id: destId, amt: parseFloat(String(foreignAmount)) });
+        } else if (destId) {
+          await supabase.rpc('increment_balance', { acc_id: destId, amt: amount });
+        }
+      }
+
+      if (piggyId && (type === 'withdrawal' || type === 'transfer')) {
+        await supabase.rpc('decrement_jar', { jar_id: piggyId, amt: amount });
+      }
+      if (destPiggyId && type === 'transfer') {
+        const jarAmt = foreignAmount ? parseFloat(String(foreignAmount)) : amount;
+        await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+      }
+
       return data;
     },
     delete: async (id: string): Promise<void> => {
+      // Reverse balance changes before deleting
+      const { data: orig } = await supabase.from('transactions').select('*').eq('id', id).single();
+      if (orig) {
+        const origAmt = parseFloat(String(orig.amount || 0));
+        if (orig.type === 'withdrawal' && orig.source_account_id) {
+          await supabase.rpc('increment_balance', { acc_id: orig.source_account_id, amt: origAmt });
+        } else if (orig.type === 'deposit' && orig.destination_account_id) {
+          await supabase.rpc('decrement_balance', { acc_id: orig.destination_account_id, amt: origAmt });
+        } else if (orig.type === 'transfer') {
+          if (orig.source_account_id) await supabase.rpc('increment_balance', { acc_id: orig.source_account_id, amt: origAmt });
+          if (orig.destination_account_id) {
+            const origForeign = orig.foreign_amount ? parseFloat(String(orig.foreign_amount)) : origAmt;
+            await supabase.rpc('decrement_balance', { acc_id: orig.destination_account_id, amt: origForeign });
+          }
+        }
+        // Reverse jar changes
+        if (orig.piggy_bank_id && (orig.type === 'withdrawal' || orig.type === 'transfer')) {
+          await supabase.rpc('increment_jar', { jar_id: orig.piggy_bank_id, amt: origAmt });
+        }
+        if (orig.destination_piggy_bank_id && orig.type === 'transfer') {
+          const origForeign = orig.foreign_amount ? parseFloat(String(orig.foreign_amount)) : origAmt;
+          await supabase.rpc('decrement_jar', { jar_id: orig.destination_piggy_bank_id, amt: origForeign });
+        }
+      }
       const { error } = await supabase.from('transactions').delete().eq('id', id);
       if (error) throw error;
     },
