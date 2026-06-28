@@ -22,6 +22,7 @@ export interface Transaction {
   description: string;
   amount: number;
   currency: CurrencyCode;
+  amount_usd: number;
   type: TransactionType;
   source_account_id: string | null;
   destination_account_id: string | null;

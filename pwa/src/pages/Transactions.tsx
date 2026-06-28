@@ -4,26 +4,18 @@ import { db } from '@/lib/db';
 import { formatCurrency, generateId } from '@/lib/utils';
 import type { PendingTransaction, CurrencyCode, TransactionType } from '@/types';
 
-async function getVesRate(): Promise<number | null> {
+async function getVesRateForDate(date: string): Promise<number | null> {
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const rates = await db.exchangeRates.getByDate(today);
+    const rates = await db.exchangeRates.getByDate(date);
     const r = rates.find(r => r.from_currency === 'USDT' && r.to_currency === 'VES')
       || rates.find(r => r.from_currency === 'USD' && r.to_currency === 'VES');
     if (r) return r.rate;
-    // Fallback: buscar la tasa más reciente
     const allRates = await db.exchangeRates.getAll();
     const vesRates = allRates
       .filter(r => (r.from_currency === 'USDT' || r.from_currency === 'USD') && r.to_currency === 'VES')
       .sort((a, b) => b.date.localeCompare(a.date));
     return vesRates[0]?.rate || null;
   } catch { return null; }
-}
-
-function toUSD(amount: number, currency: string, vesRate: number | null): number {
-  if (currency === 'USD' || currency === 'USDT') return amount;
-  if (currency === 'VES' && vesRate) return amount / vesRate;
-  return 0;
 }
 
 export default function TransactionsPage() {
@@ -34,7 +26,7 @@ export default function TransactionsPage() {
   const [tab, setTab] = useState<'all' | 'pending'>('all');
   const [pending, setPending] = useState<PendingTransaction[]>([]);
   const [showFee, setShowFee] = useState(false);
-  const [vesRate, setVesRate] = useState<number | null>(null);
+  const [previewRate, setPreviewRate] = useState<number | null>(null);
   const [editingTx, setEditingTx] = useState<string | null>(null);
 
   const [form, setForm] = useState({
@@ -62,20 +54,18 @@ export default function TransactionsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [txList, accList, catList, pendingList, jarList, rate] = await Promise.all([
+      const [txList, accList, catList, pendingList, jarList] = await Promise.all([
         db.transactions.list({ limit: 100 }),
         db.accounts.list({ type: 'asset' }),
         db.categories.list(),
         db.pendingTransactions.getAll(),
         db.piggyBanks.list(),
-        getVesRate(),
       ]);
       setTransactions(txList);
       setAccounts(accList);
       setCategories(catList);
       setPending(pendingList);
       setJars(jarList);
-      setVesRate(rate);
     } catch (err) {
       setError('Error al cargar transacciones');
       console.error(err);
@@ -85,6 +75,13 @@ export default function TransactionsPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch preview rate when form date changes
+  useEffect(() => {
+    if (form.date && form.currency === 'VES') {
+      getVesRateForDate(form.date).then(setPreviewRate);
+    }
+  }, [form.date, form.currency]);
 
   function getAccountName(id: string): string {
     return accounts.find(a => a.id === id)?.name || id;
@@ -369,9 +366,9 @@ export default function TransactionsPage() {
           )}
 
           {/* Preview conversión */}
-          {!isMultiCurrencyTransfer && form.currency === 'VES' && vesRate && form.amount && (
+          {!isMultiCurrencyTransfer && form.currency === 'VES' && previewRate && form.amount && (
             <div className="bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 text-xs text-primary">
-              ≈ {formatCurrency(parseFloat(form.amount) / vesRate)} USD (a {vesRate.toFixed(2)} VES/USD)
+              ≈ {formatCurrency(parseFloat(form.amount) / previewRate)} USD (a {previewRate.toFixed(2)} VES/USD)
             </div>
           )}
 
@@ -494,7 +491,6 @@ export default function TransactionsPage() {
                 const isTransfer = tx.type === 'transfer';
                 const desc = tx.description || 'Sin descripción';
                 const isFee = desc.toLowerCase().startsWith('comisión:');
-                const usdAmount = toUSD(amount, currency, vesRate);
                 const isVES = currency === 'VES';
 
                 return (
@@ -522,7 +518,7 @@ export default function TransactionsPage() {
                         <span className={`text-sm font-semibold ${isNegative ? 'text-danger' : isTransfer ? 'text-primary' : 'text-secondary'}`}>
                           {isNegative ? '-' : isTransfer ? '' : '+'}{formatCurrency(Math.abs(amount), currency)}
                         </span>
-                        {isVES && vesRate && <span className="text-[10px] text-text-muted">≈ {formatCurrency(usdAmount)}</span>}
+                        {isVES && <span className="text-[10px] text-text-muted">≈ {formatCurrency(tx.amount_usd || 0)}</span>}
                         <div className="flex gap-1 mt-1">
                           <button onClick={() => startEdit(tx)} className="text-[10px] text-primary hover:underline">Editar</button>
                           <button onClick={() => handleDeleteTx(tx.id)} className="text-[10px] text-danger hover:underline">Eliminar</button>

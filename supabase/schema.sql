@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   description TEXT NOT NULL,
   amount NUMERIC(15,2) NOT NULL,
   currency TEXT NOT NULL DEFAULT 'USD',
+  amount_usd NUMERIC(15,2) DEFAULT 0,
   type TEXT NOT NULL CHECK (type IN ('withdrawal', 'deposit', 'transfer')),
   source_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
   destination_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,

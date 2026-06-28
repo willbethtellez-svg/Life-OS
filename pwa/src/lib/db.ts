@@ -10,6 +10,40 @@ async function getUser() {
   return user;
 }
 
+// Convierte un monto de cualquier moneda a USD usando la tasa del día de la transacción
+async function toUSD(amount: number, currency: string, date?: string): Promise<number> {
+  if (currency === 'USD' || currency === 'USDT') return amount;
+  const txDate = date || new Date().toISOString().split('T')[0];
+  const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
+  let rate = rates?.find(r => r.from_currency === currency && r.to_currency === 'USD')?.rate
+    || rates?.find(r => r.from_currency === 'USDT' && r.to_currency === 'USD')?.rate;
+  if (!rate) {
+    const { data: allRates } = await supabase.from('exchange_rates').select('*').order('date', { ascending: false });
+    rate = allRates?.find(r => r.from_currency === currency && r.to_currency === 'USD')?.rate
+      || allRates?.find(r => r.from_currency === 'USDT' && r.to_currency === 'USD')?.rate;
+  }
+  if (!rate) return amount;
+  if (currency === 'VES') return amount / rate;
+  return amount * rate;
+}
+
+// Convierte entre dos monedas (para jarras)
+async function convertCurrency(amount: number, from: string, to: string, date?: string): Promise<number> {
+  if (from === to) return amount;
+  const usdAmount = await toUSD(amount, from, date);
+  if (to === 'USD' || to === 'USDT') return usdAmount;
+  // Si el destino no es USD, necesitamos la tasa de USD→destino
+  const txDate = date || new Date().toISOString().split('T')[0];
+  const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
+  let rate = rates?.find(r => r.from_currency === 'USD' && r.to_currency === to)?.rate;
+  if (!rate) {
+    const { data: allRates } = await supabase.from('exchange_rates').select('*').order('date', { ascending: false });
+    rate = allRates?.find(r => r.from_currency === 'USD' && r.to_currency === to)?.rate;
+  }
+  if (!rate) return amount;
+  return usdAmount * rate;
+}
+
 export const db = {
   // ─── ACCOUNTS ──────────────────────────────────────────────
   accounts: {
@@ -93,11 +127,19 @@ export const db = {
     },
     create: async (tx: Partial<Transaction>): Promise<Transaction> => {
       const user = await getUser();
-      const { data, error } = await supabase.from('transactions').insert({ ...tx, user_id: user?.id }).select().single();
-      if (error) throw error;
-
       const amount = parseFloat(String(tx.amount || 0));
       const type = tx.type;
+      const txCurrency = tx.currency || 'USD';
+      const txDate = tx.date || new Date().toISOString().split('T')[0];
+
+      // Calculate amount_usd at write time
+      const amountUsd = await toUSD(amount, txCurrency, txDate);
+
+      const { data, error } = await supabase.from('transactions').insert({
+        ...tx, user_id: user?.id, amount_usd: amountUsd,
+      }).select().single();
+      if (error) throw error;
+
       const sourceId = tx.source_account_id || null;
       const destId = tx.destination_account_id || null;
       const piggyId = tx.piggy_bank_id || null;
@@ -117,13 +159,23 @@ export const db = {
         }
       }
 
-      // Update jar amounts
+      // Update jar amounts (convert to jar's currency using transaction date's rate)
       if (piggyId && (type === 'withdrawal' || type === 'transfer')) {
-        await supabase.rpc('decrement_jar', { jar_id: piggyId, amt: amount });
+        const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', piggyId).single();
+        const jarAmt = await convertCurrency(amount, txCurrency, jar?.currency || 'USD', txDate);
+        await supabase.rpc('decrement_jar', { jar_id: piggyId, amt: jarAmt });
       }
       if (destPiggyId && type === 'transfer') {
-        const jarAmt = tx.foreign_amount ? parseFloat(String(tx.foreign_amount)) : amount;
-        await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+        const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', destPiggyId).single();
+        const destCurrency = jar?.currency || 'USD';
+        if (tx.foreign_amount) {
+          const { data: destAcc } = await supabase.from('accounts').select('currency').eq('id', destId).single();
+          const jarAmt = await convertCurrency(parseFloat(String(tx.foreign_amount)), destAcc?.currency || 'USD', destCurrency, txDate);
+          await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+        } else {
+          const jarAmt = await convertCurrency(amount, txCurrency, destCurrency, txDate);
+          await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+        }
       }
 
       return data;
@@ -133,6 +185,7 @@ export const db = {
       const { data: orig } = await supabase.from('transactions').select('*').eq('id', id).single();
       if (orig) {
         const origAmt = parseFloat(String(orig.amount || 0));
+        const origCurrency = orig.currency || 'USD';
         // Reverse original account changes
         if (orig.type === 'withdrawal' && orig.source_account_id) {
           await supabase.rpc('increment_balance', { acc_id: orig.source_account_id, amt: origAmt });
@@ -147,20 +200,37 @@ export const db = {
         }
         // Reverse original jar changes
         if (orig.piggy_bank_id && (orig.type === 'withdrawal' || orig.type === 'transfer')) {
-          await supabase.rpc('increment_jar', { jar_id: orig.piggy_bank_id, amt: origAmt });
+          const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.piggy_bank_id).single();
+          const jarAmt = await convertCurrency(origAmt, origCurrency, jar?.currency || 'USD', orig.date);
+          await supabase.rpc('increment_jar', { jar_id: orig.piggy_bank_id, amt: jarAmt });
         }
         if (orig.destination_piggy_bank_id && orig.type === 'transfer') {
+          const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.destination_piggy_bank_id).single();
           const origForeign = orig.foreign_amount ? parseFloat(String(orig.foreign_amount)) : origAmt;
-          await supabase.rpc('decrement_jar', { jar_id: orig.destination_piggy_bank_id, amt: origForeign });
+          const origDestAccCurrency = orig.destination_account_id
+            ? (await supabase.from('accounts').select('currency').eq('id', orig.destination_account_id).single()).data?.currency || 'USD'
+            : origCurrency;
+          const jarAmt = await convertCurrency(origForeign, origDestAccCurrency, jar?.currency || 'USD', orig.date);
+          await supabase.rpc('decrement_jar', { jar_id: orig.destination_piggy_bank_id, amt: jarAmt });
         }
       }
 
-      const { data, error } = await supabase.from('transactions').update(updates).eq('id', id).select().single();
+      // Calculate new amount_usd
+      const newAmount = parseFloat(String(updates.amount ?? orig?.amount ?? 0));
+      const newCurrency = updates.currency ?? orig?.currency ?? 'USD';
+      const newDate = updates.date ?? orig?.date ?? new Date().toISOString().split('T')[0];
+      const newAmountUsd = await toUSD(newAmount, newCurrency, newDate);
+
+      const { data, error } = await supabase.from('transactions').update({
+        ...updates, amount_usd: newAmountUsd,
+      }).eq('id', id).select().single();
       if (error) throw error;
 
       // Apply new transaction effects
-      const amount = parseFloat(String(updates.amount ?? orig?.amount ?? 0));
+      const amount = newAmount;
       const type = updates.type ?? orig?.type;
+      const txCurrency = newCurrency;
+      const txDate = newDate;
       const sourceId = updates.source_account_id ?? orig?.source_account_id;
       const destId = updates.destination_account_id ?? orig?.destination_account_id;
       const piggyId = updates.piggy_bank_id ?? orig?.piggy_bank_id;
@@ -181,11 +251,21 @@ export const db = {
       }
 
       if (piggyId && (type === 'withdrawal' || type === 'transfer')) {
-        await supabase.rpc('decrement_jar', { jar_id: piggyId, amt: amount });
+        const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', piggyId).single();
+        const jarAmt = await convertCurrency(amount, txCurrency, jar?.currency || 'USD', txDate);
+        await supabase.rpc('decrement_jar', { jar_id: piggyId, amt: jarAmt });
       }
       if (destPiggyId && type === 'transfer') {
-        const jarAmt = foreignAmount ? parseFloat(String(foreignAmount)) : amount;
-        await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+        const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', destPiggyId).single();
+        const destCurrency = jar?.currency || 'USD';
+        if (foreignAmount) {
+          const { data: destAcc } = await supabase.from('accounts').select('currency').eq('id', destId).single();
+          const jarAmt = await convertCurrency(parseFloat(String(foreignAmount)), destAcc?.currency || 'USD', destCurrency, txDate);
+          await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+        } else {
+          const jarAmt = await convertCurrency(amount, txCurrency, destCurrency, txDate);
+          await supabase.rpc('increment_jar', { jar_id: destPiggyId, amt: jarAmt });
+        }
       }
 
       return data;
@@ -195,6 +275,7 @@ export const db = {
       const { data: orig } = await supabase.from('transactions').select('*').eq('id', id).single();
       if (orig) {
         const origAmt = parseFloat(String(orig.amount || 0));
+        const origCurrency = orig.currency || 'USD';
         if (orig.type === 'withdrawal' && orig.source_account_id) {
           await supabase.rpc('increment_balance', { acc_id: orig.source_account_id, amt: origAmt });
         } else if (orig.type === 'deposit' && orig.destination_account_id) {
@@ -206,13 +287,20 @@ export const db = {
             await supabase.rpc('decrement_balance', { acc_id: orig.destination_account_id, amt: origForeign });
           }
         }
-        // Reverse jar changes
+        // Reverse jar changes (using original date's rate)
         if (orig.piggy_bank_id && (orig.type === 'withdrawal' || orig.type === 'transfer')) {
-          await supabase.rpc('increment_jar', { jar_id: orig.piggy_bank_id, amt: origAmt });
+          const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.piggy_bank_id).single();
+          const jarAmt = await convertCurrency(origAmt, origCurrency, jar?.currency || 'USD', orig.date);
+          await supabase.rpc('increment_jar', { jar_id: orig.piggy_bank_id, amt: jarAmt });
         }
         if (orig.destination_piggy_bank_id && orig.type === 'transfer') {
+          const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.destination_piggy_bank_id).single();
           const origForeign = orig.foreign_amount ? parseFloat(String(orig.foreign_amount)) : origAmt;
-          await supabase.rpc('decrement_jar', { jar_id: orig.destination_piggy_bank_id, amt: origForeign });
+          const origDestAccCurrency = orig.destination_account_id
+            ? (await supabase.from('accounts').select('currency').eq('id', orig.destination_account_id).single()).data?.currency || 'USD'
+            : origCurrency;
+          const jarAmt = await convertCurrency(origForeign, origDestAccCurrency, jar?.currency || 'USD', orig.date);
+          await supabase.rpc('decrement_jar', { jar_id: orig.destination_piggy_bank_id, amt: jarAmt });
         }
       }
       const { error } = await supabase.from('transactions').delete().eq('id', id);
