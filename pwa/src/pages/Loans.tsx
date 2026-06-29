@@ -54,7 +54,7 @@ export default function LoansPage() {
   const totalDebt = liabilities.reduce((sum: number, l: any) => sum + parseFloat(l.current_balance || l.amount || '0'), 0);
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Préstamos / Deudas</h1>
         <button onClick={() => { resetForm(); setShowForm(!showForm); }}

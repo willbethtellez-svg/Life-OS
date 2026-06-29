@@ -52,7 +52,7 @@ export default function VehiclePage() {
   const nextService = lastMaintenance.find(r => r.next_mileage);
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Vehículo</h1>
         <button

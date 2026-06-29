@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatCurrency } from '@/lib/utils';
 import type { CurrencyCode } from '@/types';
 
 export default function AccountsPage() {
@@ -68,8 +68,29 @@ export default function AccountsPage() {
   async function loadTransactions(account: any) {
     setSelected(account);
     setTxHistory([]);
-    try { setTxHistory(await db.accounts.transactions(account.id, { limit: 30 })); }
-    catch (err) { console.error(err); }
+    try {
+      const txs = await db.accounts.transactions(account.id, { limit: 100 });
+      // Sort ascending for running balance
+      txs.sort((a: any, b: any) => a.date.localeCompare(b.date));
+      setTxHistory(txs);
+    } catch (err) { console.error(err); }
+  }
+
+  function computeRunningBalance(tx: any, index: number): number {
+    const initial = parseFloat(selected?.initial_balance || '0');
+    let balance = initial;
+    for (let i = 0; i <= index; i++) {
+      const t = txHistory[i];
+      if (!t) continue;
+      const amt = parseFloat(t.amount || '0');
+      if (t.source_account_id === selected?.id) {
+        balance -= amt;
+      }
+      if (t.destination_account_id === selected?.id) {
+        balance += amt;
+      }
+    }
+    return balance;
   }
 
   async function handleReconcile() {
@@ -102,28 +123,40 @@ export default function AccountsPage() {
 
   const totalDiff = totalRealUSD - totalUSD;
 
+  // ─── Account detail / ledger view ─────────────────────────
   if (selected) {
     const balance = parseFloat(selected.current_balance || '0');
     const currency = selected.currency || 'USD';
     return (
-      <div className="p-4 space-y-4 max-w-lg mx-auto">
-        <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text flex items-center gap-1 text-sm">← Volver</button>
-        <div className="bg-surface rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold">{selected.name}</h2>
-            <button onClick={() => { startEdit(selected); setSelected(null); }} className="text-xs text-primary hover:underline">Editar</button>
+      <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
+        {/* Back + header */}
+        <div className="flex items-center gap-3">
+          <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text p-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          </button>
+          <div>
+            <h1 className="text-xl font-bold">{selected.name}</h1>
+            <p className="text-sm text-text-muted">{currency} · {selected.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
           </div>
-          <p className="text-3xl font-bold mt-2 text-primary">{formatCurrency(balance, currency)}</p>
-          <p className="text-sm text-text-muted mt-1">{currency} · {selected.type}</p>
+          <div className="ml-auto text-right">
+            <p className="text-2xl font-bold text-primary">{formatCurrency(balance, currency)}</p>
+          </div>
         </div>
 
-        <button onClick={() => setShowReconcile(!showReconcile)}
-          className="w-full bg-surface border border-surface-light rounded-lg py-2.5 text-sm font-medium text-text-muted hover:text-text transition-colors">
-          {showReconcile ? 'Cancelar' : 'Conciliar saldo real'}
-        </button>
+        {/* Reconcile */}
+        <div className="flex gap-2">
+          <button onClick={() => setShowReconcile(!showReconcile)}
+            className="bg-surface border border-surface-light rounded-lg px-4 py-2 text-sm font-medium text-text-muted hover:text-text transition-colors">
+            {showReconcile ? 'Cancelar' : 'Conciliar'}
+          </button>
+          <button onClick={() => { startEdit(selected); setSelected(null); }}
+            className="bg-surface border border-surface-light rounded-lg px-4 py-2 text-sm font-medium text-text-muted hover:text-text transition-colors">
+            Editar
+          </button>
+        </div>
 
         {showReconcile && (
-          <div className="bg-surface rounded-xl p-4 space-y-3">
+          <div className="bg-surface rounded-xl p-4 space-y-3 border border-surface-light">
             <p className="text-sm font-medium">Saldo real</p>
             <input type="number" step="0.01" value={reconcileAmount} onChange={e => setReconcileAmount(e.target.value)}
               className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary" placeholder={balance.toString()} />
@@ -136,33 +169,95 @@ export default function AccountsPage() {
           </div>
         )}
 
-        <div className="bg-surface rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Historial</h3>
-          <div className="space-y-2">
-            {txHistory.length === 0 && <p className="text-text-muted text-sm text-center py-4">Sin movimientos</p>}
-            {txHistory.map((tx: any) => {
-              const amount = parseFloat(tx.amount || '0');
-              const isNeg = tx.type === 'withdrawal' || amount < 0;
-              return (
-                <div key={tx.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{tx.description || 'Sin descripción'}</p>
-                    <p className="text-xs text-text-muted">{formatDate(tx.date || tx.created_at)}</p>
+        {/* Ledger / Transaction history */}
+        <div className="bg-surface rounded-xl border border-surface-light overflow-hidden">
+          <div className="px-4 py-3 border-b border-surface-light">
+            <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide">Libro contable</h3>
+          </div>
+
+          {/* Desktop ledger table */}
+          <div className="hidden lg:block">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-surface-light bg-surface-light/30">
+                  <th className="text-left px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Fecha</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Descripción</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Debe (ingreso)</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Haber (egreso)</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Saldo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {txHistory.length === 0 ? (
+                  <tr><td colSpan={5} className="text-center py-8 text-text-muted text-sm">Sin movimientos</td></tr>
+                ) : (
+                  txHistory.map((tx: any, i: number) => {
+                    const amount = parseFloat(tx.amount || '0');
+                    const isDebit = tx.destination_account_id === selected.id; // ingresa a esta cuenta
+                    const isCredit = tx.source_account_id === selected.id; // sale de esta cuenta
+                    const running = computeRunningBalance(tx, i);
+                    return (
+                      <tr key={tx.id} className="border-b border-surface-light last:border-0 hover:bg-surface-light/30 transition-colors">
+                        <td className="px-4 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
+                        <td className="px-4 py-3">
+                          <p className="text-sm font-medium truncate max-w-[300px]">{tx.description || 'Sin descripción'}</p>
+                          {tx.type === 'transfer' && isDebit && (
+                            <p className="text-[11px] text-text-muted">desde {tx.source_name || 'origen'}</p>
+                          )}
+                          {tx.type === 'transfer' && isCredit && (
+                            <p className="text-[11px] text-text-muted">hacia {tx.destination_name || 'destino'}</p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right text-sm font-medium text-secondary">
+                          {isDebit ? formatCurrency(amount, currency) : ''}
+                        </td>
+                        <td className="px-4 py-3 text-right text-sm font-medium text-danger">
+                          {isCredit ? formatCurrency(amount, currency) : ''}
+                        </td>
+                        <td className="px-4 py-3 text-right text-sm font-semibold text-text">{formatCurrency(running, currency)}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile ledger list */}
+          <div className="lg:hidden space-y-0">
+            {txHistory.length === 0 ? (
+              <div className="text-center py-8 text-text-muted"><p className="text-sm">Sin movimientos</p></div>
+            ) : (
+              txHistory.map((tx: any, i: number) => {
+                const amount = parseFloat(tx.amount || '0');
+                const isDebit = tx.destination_account_id === selected.id;
+                const isCredit = tx.source_account_id === selected.id;
+                const running = computeRunningBalance(tx, i);
+                return (
+                  <div key={tx.id} className="flex items-center justify-between py-3 px-4 border-b border-surface-light last:border-0">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{tx.description || 'Sin descripción'}</p>
+                      <p className="text-xs text-text-muted">{tx.date}</p>
+                    </div>
+                    <div className="text-right ml-3">
+                      <span className={`text-sm font-semibold ${isCredit ? 'text-danger' : 'text-secondary'}`}>
+                        {isCredit ? '−' : '+'}{formatCurrency(amount, currency)}
+                      </span>
+                      <p className="text-[11px] text-text-muted">{formatCurrency(running, currency)}</p>
+                    </div>
                   </div>
-                  <span className={`text-sm font-semibold ml-3 ${isNeg ? 'text-danger' : 'text-secondary'}`}>
-                    {isNeg ? '-' : '+'}{formatCurrency(Math.abs(amount), currency)}
-                  </span>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       </div>
     );
   }
 
+  // ─── Account list (default view) ──────────────────────────
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Cuentas</h1>
         <button onClick={() => { resetForm(); setShowForm(!showForm); }}
@@ -174,14 +269,14 @@ export default function AccountsPage() {
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>}
 
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-surface rounded-xl p-4 space-y-3">
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Nombre</label>
-            <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="Ej. Bco Familiar" required />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
+        <form onSubmit={handleCreate} className="bg-surface rounded-xl p-4 lg:p-5 space-y-3 border border-surface-light">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-text-muted mb-1">Nombre</label>
+              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Ej. Bco Familiar" required />
+            </div>
             <div>
               <label className="block text-xs text-text-muted mb-1">Tipo</label>
               <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}
@@ -211,7 +306,7 @@ export default function AccountsPage() {
         </form>
       )}
 
-      <div className="bg-surface rounded-xl p-4">
+      <div className="bg-surface rounded-xl p-4 border border-surface-light">
         <div className="flex justify-between items-center">
           <div>
             <p className="text-text-muted text-xs uppercase tracking-wide">Total en USD</p>
@@ -245,11 +340,11 @@ export default function AccountsPage() {
             const realNum = realVal ? parseFloat(realVal) : null;
             const diff = realNum !== null ? realNum - balance : null;
             return (
-              <div key={acc.id} className="bg-surface rounded-xl p-4">
+              <div key={acc.id} className="bg-surface rounded-xl p-4 border border-surface-light">
                 <div className="flex items-center justify-between cursor-pointer" onClick={() => loadTransactions(acc)}>
                   <div>
                     <p className="font-medium">{acc.name}</p>
-                    <p className="text-xs text-text-muted mt-0.5">{currency} · {acc.type}</p>
+                    <p className="text-xs text-text-muted mt-0.5">{currency} · {acc.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
                   </div>
                   <div className="text-right">
                     <p className={`font-bold text-lg ${balance >= 0 ? 'text-secondary' : 'text-danger'}`}>

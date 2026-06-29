@@ -1,16 +1,18 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #0f172a;
-  --color-surface: #1e293b;
-  --color-surface-light: #334155;
-  --color-primary: #3b82f6;
-  --color-primary-dark: #2563eb;
-  --color-secondary: #10b981;
+  --color-background: #0b1120;
+  --color-surface: #131c31;
+  --color-surface-light: #1e293b;
+  --color-primary: #6366f1;
+  --color-primary-dark: #4f46e5;
+  --color-secondary: #22c55e;
   --color-danger: #ef4444;
-  --color-warning: #f59e0b;
-  --color-text: #f8fafc;
-  --color-text-muted: #94a3b8;
+  --color-warning: #eab308;
+  --color-transfer: #f59e0b;
+  --color-text: #f1f5f9;
+  --color-text-muted: #64748b;
+  --sidebar-width: 240px;
 }
 
 * {
@@ -22,7 +24,17 @@ html, body {
   padding: 0;
   background: var(--color-background);
   color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+}
+
+body.sidebar-open {
+  overflow: hidden;
+}
+
+@media (min-width: 1024px) {
+  body.sidebar-open {
+    overflow: auto;
+  }
 }

@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format } from 'date-fns';
 import { db } from '@/lib/db';
 import { formatCurrency, generateId } from '@/lib/utils';
 import type { PendingTransaction, CurrencyCode, TransactionType } from '@/types';
@@ -28,6 +27,7 @@ export default function TransactionsPage() {
   const [showFee, setShowFee] = useState(false);
   const [previewRate, setPreviewRate] = useState<number | null>(null);
   const [editingTx, setEditingTx] = useState<string | null>(null);
+  const [editingField, setEditingField] = useState<{ id: string; field: string } | null>(null);
 
   const [form, setForm] = useState({
     amount: '',
@@ -76,7 +76,6 @@ export default function TransactionsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Fetch preview rate when form date changes
   useEffect(() => {
     if (form.date && form.currency === 'VES') {
       getVesRateForDate(form.date).then(setPreviewRate);
@@ -164,7 +163,6 @@ export default function TransactionsPage() {
           });
         }
 
-        // Si es transferencia multi-moneda, calcular e insertar tasa del día
         if (form.type === 'transfer' && foreignAmount && foreignAmount > 0 && amount > 0) {
           const sourceCurrency = form.currency;
           const destCurrency = accounts.find(a => a.id === form.destinationAccountId)?.currency;
@@ -177,9 +175,8 @@ export default function TransactionsPage() {
             } else {
               fromCur = sourceCurrency; toCur = destCurrency; rate = foreignAmount / amount;
             }
-            const today = form.date;
             await db.exchangeRates.set({
-              date: today, from_currency: fromCur, to_currency: toCur,
+              date: form.date, from_currency: fromCur, to_currency: toCur,
               rate: Math.round(rate * 100) / 100, source: 'p2p_average', transactions_used: 1,
             });
           }
@@ -191,6 +188,16 @@ export default function TransactionsPage() {
     } catch (err) {
       console.error(err);
       setError(editingTx ? 'Error al editar la transacción' : 'Error al crear la transacción');
+    }
+  }
+
+  async function handleInlineUpdate(txId: string, field: string, value: any) {
+    try {
+      await db.transactions.update(txId, { [field]: value });
+      setEditingField(null);
+      fetchData();
+    } catch (err) {
+      console.error(err);
     }
   }
 
@@ -257,7 +264,8 @@ export default function TransactionsPage() {
   const isMultiCurrencyTransfer = form.type === 'transfer' && form.currency !== accounts.find(a => a.id === form.destinationAccountId)?.currency;
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 lg:p-6 space-y-4 max-w-5xl">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Transacciones</h1>
         <button onClick={() => { resetForm(); setShowForm(!showForm); }}
@@ -266,63 +274,66 @@ export default function TransactionsPage() {
         </button>
       </div>
 
-      {showForm && (
-        <form onSubmit={handleSubmit} className="bg-surface rounded-xl p-4 space-y-3">
-          {/* Fecha */}
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Fecha</label>
-            <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" />
-          </div>
+      {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>}
 
-          {/* Tipo */}
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Tipo</label>
-            <div className="flex gap-1">
-              {(['withdrawal', 'deposit', 'transfer'] as TransactionType[]).map(t => (
-                <button key={t} type="button" onClick={() => setForm(f => ({ ...f, type: t, categoryId: '', piggyBankId: '', destinationPiggyBankId: '' }))}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    form.type === t ? t === 'withdrawal' ? 'bg-danger text-white' : t === 'deposit' ? 'bg-secondary text-white' : 'bg-primary text-white' : 'bg-surface-light text-text-muted'
-                  }`}>
-                  {t === 'withdrawal' ? 'Gasto' : t === 'deposit' ? 'Ingreso' : 'Transferencia'}
-                </button>
-              ))}
+      {/* Form */}
+      {showForm && (
+        <form onSubmit={handleSubmit} className="bg-surface rounded-xl p-4 lg:p-5 space-y-3 border border-surface-light">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-text-muted mb-1">Fecha</label>
+              <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" />
+            </div>
+            <div className="lg:col-span-2">
+              <label className="block text-xs text-text-muted mb-1">Descripción</label>
+              <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="¿En qué gastaste?" required />
             </div>
           </div>
 
-          {/* Descripción */}
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Descripción</label>
-            <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="¿En qué gastaste?" required />
-          </div>
-
-          {/* Cuenta origen */}
-          <div>
-            <label className="block text-xs text-text-muted mb-1">{form.type === 'transfer' ? 'Cuenta origen' : 'Cuenta'}</label>
-            <select value={form.accountId} onChange={e => setForm(f => ({ ...f, accountId: e.target.value, currency: accounts.find(a => a.id === e.target.value)?.currency || f.currency }))}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" required>
-              <option value="">Selecciona</option>
-              {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
-            </select>
-          </div>
-
-          {/* Cuenta destino (transfer) */}
-          {form.type === 'transfer' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs text-text-muted mb-1">Cuenta destino</label>
-              <select value={form.destinationAccountId} onChange={e => setForm(f => ({ ...f, destinationAccountId: e.target.value }))}
+              <label className="block text-xs text-text-muted mb-1">
+                {form.type === 'transfer' ? 'Cuenta origen' : 'Cuenta'}
+              </label>
+              <select value={form.accountId} onChange={e => setForm(f => ({ ...f, accountId: e.target.value, currency: accounts.find(a => a.id === e.target.value)?.currency || f.currency }))}
                 className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" required>
-                <option value="">Selecciona destino</option>
-                {accounts.filter(a => a.id !== form.accountId).map((a: any) => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
+                <option value="">Selecciona</option>
+                {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
               </select>
             </div>
-          )}
 
-          {/* Monto y moneda */}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2">
+            {form.type === 'transfer' && (
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Cuenta destino</label>
+                <select value={form.destinationAccountId} onChange={e => setForm(f => ({ ...f, destinationAccountId: e.target.value }))}
+                  className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" required>
+                  <option value="">Selecciona destino</option>
+                  {accounts.filter(a => a.id !== form.accountId).map((a: any) => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
+                </select>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs text-text-muted mb-1">Tipo</label>
+              <div className="flex gap-1">
+                {(['withdrawal', 'deposit', 'transfer'] as TransactionType[]).map(t => (
+                  <button key={t} type="button" onClick={() => setForm(f => ({ ...f, type: t, categoryId: '', piggyBankId: '', destinationPiggyBankId: '' }))}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      form.type === t ? t === 'withdrawal' ? 'bg-danger text-white' : t === 'deposit' ? 'bg-secondary text-white' : 'bg-primary text-white' : 'bg-surface-light text-text-muted'
+                    }`}>
+                    {t === 'withdrawal' ? 'Gasto' : t === 'deposit' ? 'Ingreso' : 'Transf'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Amount row */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-end">
+            <div>
               <label className="block text-xs text-text-muted mb-1">
                 {isMultiCurrencyTransfer ? `Monto enviado (${form.currency})` : 'Monto'}
               </label>
@@ -337,9 +348,21 @@ export default function TransactionsPage() {
                 <option value="VES">VES</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="BTC">BTC</option><option value="USDT">USDT</option>
               </select>
             </div>
+            <div>
+              {form.type !== 'transfer' && (
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Categoría</label>
+                  <select value={form.categoryId} onChange={e => setForm(f => ({ ...f, categoryId: e.target.value }))}
+                    className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
+                    <option value="">Sin categoría</option>
+                    {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Monto recibido (multi-moneda) */}
+          {/* Multi-currency transfer detail */}
           {isMultiCurrencyTransfer && (
             <div className="bg-primary/10 border border-primary/20 rounded-lg p-3 space-y-2">
               <p className="text-xs font-medium text-primary">Monto recibido en la cuenta destino</p>
@@ -365,52 +388,37 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {/* Preview conversión */}
           {!isMultiCurrencyTransfer && form.currency === 'VES' && previewRate && form.amount && (
             <div className="bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 text-xs text-primary">
               ≈ {formatCurrency(parseFloat(form.amount) / previewRate)} USD (a {previewRate.toFixed(2)} VES/USD)
             </div>
           )}
 
-          {/* Jarra origen (withdrawal o transfer) */}
-          {(form.type === 'withdrawal' || form.type === 'transfer') && jars.length > 0 && (
-            <div>
-              <label className="block text-xs text-text-muted mb-1">
-                {form.type === 'transfer' ? 'Jarra de donde sale' : 'Jarra de donde sale'}
-              </label>
-              <select value={form.piggyBankId} onChange={e => setForm(f => ({ ...f, piggyBankId: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="">Sin jarra</option>
-                {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
-              </select>
-            </div>
-          )}
+          {/* Jars */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {(form.type === 'withdrawal' || form.type === 'transfer') && jars.length > 0 && (
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Jarra (origen)</label>
+                <select value={form.piggyBankId} onChange={e => setForm(f => ({ ...f, piggyBankId: e.target.value }))}
+                  className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option value="">Sin jarra</option>
+                  {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
+                </select>
+              </div>
+            )}
+            {form.type === 'transfer' && jars.length > 0 && (
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Jarra (destino)</label>
+                <select value={form.destinationPiggyBankId} onChange={e => setForm(f => ({ ...f, destinationPiggyBankId: e.target.value }))}
+                  className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option value="">Sin jarra</option>
+                  {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
+                </select>
+              </div>
+            )}
+          </div>
 
-          {/* Jarra destino (transfer) */}
-          {form.type === 'transfer' && jars.length > 0 && (
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Jarra donde entra</label>
-              <select value={form.destinationPiggyBankId} onChange={e => setForm(f => ({ ...f, destinationPiggyBankId: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="">Sin jarra</option>
-                {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
-              </select>
-            </div>
-          )}
-
-          {/* Categoría (no transfer) */}
-          {form.type !== 'transfer' && (
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Categoría</label>
-              <select value={form.categoryId} onChange={e => setForm(f => ({ ...f, categoryId: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="">Sin categoría</option>
-                {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-          )}
-
-          {/* Comisión */}
+          {/* Fee toggle */}
           {form.type !== 'transfer' && (
             <div>
               <button type="button" onClick={() => setShowFee(!showFee)} className="flex items-center gap-2 text-xs text-text-muted hover:text-text transition-colors">
@@ -435,8 +443,6 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-3 py-2 text-xs text-danger">{error}</div>}
-
           <div className="flex gap-2">
             <button type="submit" className="flex-1 bg-primary hover:bg-primary-dark text-white font-medium rounded-lg py-2.5 transition-colors">
               {editingTx ? 'Guardar cambios' : 'Registrar'}
@@ -446,14 +452,16 @@ export default function TransactionsPage() {
         </form>
       )}
 
-      <div className="flex gap-1 bg-surface rounded-lg p-1">
-        <button onClick={() => setTab('all')} className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${tab === 'all' ? 'bg-primary text-white' : 'text-text-muted'}`}>Todas</button>
-        <button onClick={() => setTab('pending')} className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors relative ${tab === 'pending' ? 'bg-warning text-black' : 'text-text-muted'}`}>
+      {/* Tabs */}
+      <div className="flex gap-1 bg-surface rounded-lg p-1 w-fit">
+        <button onClick={() => setTab('all')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === 'all' ? 'bg-primary text-white' : 'text-text-muted'}`}>Todas</button>
+        <button onClick={() => setTab('pending')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors relative ${tab === 'pending' ? 'bg-warning text-black' : 'text-text-muted'}`}>
           Pendientes
-          {activePending.length > 0 && <span className="absolute -top-1 -right-1 bg-danger text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{activePending.length}</span>}
+          {activePending.length > 0 && <span className="ml-1.5 bg-danger text-white text-[10px] rounded-full px-1.5 py-0.5">{activePending.length}</span>}
         </button>
       </div>
 
+      {/* Pending tab */}
       {tab === 'pending' && (
         <div className="space-y-2">
           {activePending.length === 0 && <div className="text-center py-8 text-text-muted"><p className="text-sm">No hay pendientes</p></div>}
@@ -477,57 +485,198 @@ export default function TransactionsPage() {
         </div>
       )}
 
+      {/* All transactions - Table view (desktop) / Card list (mobile) */}
       {tab === 'all' && (
-        <div className="space-y-1">
+        <div>
           {loading ? (
             <div className="flex justify-center py-8"><div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" /></div>
+          ) : transactions.length === 0 ? (
+            <div className="text-center py-8 text-text-muted"><p className="text-sm">No hay transacciones</p></div>
           ) : (
             <>
-              {transactions.length === 0 && <div className="text-center py-8 text-text-muted"><p className="text-sm">No hay transacciones</p></div>}
-              {transactions.map((tx: any) => {
-                const amount = parseFloat(tx.amount || '0');
-                const currency = tx.currency || 'USD';
-                const isNegative = tx.type === 'withdrawal';
-                const isTransfer = tx.type === 'transfer';
-                const desc = tx.description || 'Sin descripción';
-                const isFee = desc.toLowerCase().startsWith('comisión:');
-                const isVES = currency === 'VES';
+              {/* Desktop table */}
+              <div className="hidden lg:block bg-surface rounded-xl border border-surface-light overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-surface-light">
+                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Fecha</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Descripción</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Cuenta</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Categoría</th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Jarra</th>
+                      <th className="text-right px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Monto</th>
+                      <th className="w-16 px-4 py-3"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transactions.map((tx: any) => {
+                      const amount = parseFloat(tx.amount || '0');
+                      const currency = tx.currency || 'USD';
+                      const isNegative = tx.type === 'withdrawal';
+                      const isTransfer = tx.type === 'transfer';
+                      const desc = tx.description || 'Sin descripción';
+                      const isFee = desc.toLowerCase().startsWith('comisión:');
 
-                return (
-                  <div key={tx.id} className={`bg-surface rounded-xl p-3 border-b border-surface-light ${isFee ? 'opacity-60' : ''}`}>
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {isFee ? '↳ ' : ''}{isTransfer ? '↔ ' : ''}{desc}
-                        </p>
-                        <p className="text-xs text-text-muted">
-                          {tx.date}
-                          {tx.category_name && ` · ${tx.category_name}`}
-                          {tx.source_name && ` · ${tx.source_name}`}
-                          {isTransfer && tx.destination_name && ` → ${tx.destination_name}`}
-                          {tx.piggy_bank_name && ` · 🏺 ${tx.piggy_bank_name}`}
-                          {tx.destination_piggy_bank_name && ` → 🏺 ${tx.destination_piggy_bank_name}`}
-                        </p>
-                        {tx.foreign_amount > 0 && tx.foreign_currency && (
-                          <p className="text-[10px] text-text-muted">
-                            Recibido: {formatCurrency(tx.foreign_amount, tx.foreign_currency)}
+                      return (
+                        <tr key={tx.id} className={`border-b border-surface-light last:border-0 hover:bg-surface-light/30 transition-colors ${isFee ? 'opacity-50' : ''}`}>
+                          <td className="px-4 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
+                          <td className="px-4 py-3">
+                            <p className="text-sm font-medium truncate max-w-[200px]">
+                              {isFee && <span className="text-text-muted mr-1">↳</span>}
+                              {isTransfer && <span className="text-transfer mr-1">⟷</span>}
+                              {desc}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-text-muted">
+                            {tx.source_name}
+                            {isTransfer && tx.destination_name && <span className="text-text-muted/50 mx-1">→</span>}
+                            {isTransfer && tx.destination_name && <span className="text-text-muted">{tx.destination_name}</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {tx.type !== 'transfer' ? (
+                              editingField?.id === tx.id && editingField?.field === 'category' ? (
+                                <select
+                                  autoFocus
+                                  value={tx.category_id || ''}
+                                  onChange={e => handleInlineUpdate(tx.id, 'category_id', e.target.value || null)}
+                                  onBlur={() => setEditingField(null)}
+                                  className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none"
+                                >
+                                  <option value="">Sin categoría</option>
+                                  {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                              ) : (
+                                <button onClick={() => setEditingField({ id: tx.id, field: 'category' })}
+                                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                    tx.category_name
+                                      ? 'border-primary/30 text-primary bg-primary/5 hover:bg-primary/10'
+                                      : 'border-surface-light text-text-muted hover:border-text-muted'
+                                  }`}>
+                                  {tx.category_name || '+'}
+                                </button>
+                              )
+                            ) : (
+                              <span className="text-xs text-text-muted">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              {tx.piggy_bank_name && (
+                                editingField?.id === tx.id && editingField?.field === 'piggy' ? (
+                                  <select
+                                    autoFocus
+                                    value={tx.piggy_bank_id || ''}
+                                    onChange={e => handleInlineUpdate(tx.id, 'piggy_bank_id', e.target.value || null)}
+                                    onBlur={() => setEditingField(null)}
+                                    className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none"
+                                  >
+                                    <option value="">Sin jarra</option>
+                                    {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name}</option>)}
+                                  </select>
+                                ) : (
+                                  <button onClick={() => setEditingField({ id: tx.id, field: 'piggy' })}
+                                    className="text-xs px-2 py-0.5 rounded-full border border-transfer/30 text-transfer bg-transfer/5 hover:bg-transfer/10">
+                                    🏺 {tx.piggy_bank_name}
+                                  </button>
+                                )
+                              )}
+                              {tx.destination_piggy_bank_name && (
+                                <span className="text-xs px-2 py-0.5 rounded-full border border-secondary/30 text-secondary bg-secondary/5">
+                                  → 🏺 {tx.destination_piggy_bank_name}
+                                </span>
+                              )}
+                              {!tx.piggy_bank_name && !tx.destination_piggy_bank_name && (
+                                <button onClick={() => setEditingField({ id: tx.id, field: 'piggy' })}
+                                  className="text-xs text-text-muted hover:text-text">
+                                  +
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex flex-col items-end">
+                              <span className={`text-sm font-semibold ${
+                                isNegative ? 'text-danger' : isTransfer ? 'text-transfer' : 'text-secondary'
+                              }`}>
+                                {isTransfer ? '±' : isNegative ? '−' : '+'}
+                                {formatCurrency(Math.abs(amount), currency)}
+                              </span>
+                              {tx.amount_usd != null && tx.currency !== 'USD' && tx.currency !== 'USDT' && (
+                                <span className="text-[11px] text-text-muted">≈ {formatCurrency(tx.amount_usd)} USD</span>
+                              )}
+                              {tx.foreign_amount > 0 && tx.foreign_currency && (
+                                <span className="text-[10px] text-text-muted">
+                                  Recibido: {formatCurrency(tx.foreign_amount, tx.foreign_currency)}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => startEdit(tx)} className="text-text-muted hover:text-primary p-1" title="Editar">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                              </button>
+                              <button onClick={() => handleDeleteTx(tx.id)} className="text-text-muted hover:text-danger p-1" title="Eliminar">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile card list */}
+              <div className="lg:hidden space-y-1">
+                {transactions.map((tx: any) => {
+                  const amount = parseFloat(tx.amount || '0');
+                  const currency = tx.currency || 'USD';
+                  const isNegative = tx.type === 'withdrawal';
+                  const isTransfer = tx.type === 'transfer';
+                  const desc = tx.description || 'Sin descripción';
+                  const isFee = desc.toLowerCase().startsWith('comisión:');
+
+                  return (
+                    <div key={tx.id} className={`bg-surface rounded-xl p-3 border-b border-surface-light ${isFee ? 'opacity-60' : ''}`}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">
+                            {isFee ? '↳ ' : ''}{isTransfer ? '⟷ ' : ''}{desc}
                           </p>
-                        )}
-                      </div>
-                      <div className="text-right ml-3 flex flex-col items-end">
-                        <span className={`text-sm font-semibold ${isNegative ? 'text-danger' : isTransfer ? 'text-primary' : 'text-secondary'}`}>
-                          {isNegative ? '-' : isTransfer ? '' : '+'}{formatCurrency(Math.abs(amount), currency)}
-                        </span>
-                        {isVES && <span className="text-[10px] text-text-muted">≈ {formatCurrency(tx.amount_usd || 0)}</span>}
-                        <div className="flex gap-1 mt-1">
-                          <button onClick={() => startEdit(tx)} className="text-[10px] text-primary hover:underline">Editar</button>
-                          <button onClick={() => handleDeleteTx(tx.id)} className="text-[10px] text-danger hover:underline">Eliminar</button>
+                          <p className="text-xs text-text-muted">
+                            {tx.date}
+                            {tx.category_name && ` · ${tx.category_name}`}
+                            {tx.source_name && ` · ${tx.source_name}`}
+                            {isTransfer && tx.destination_name && ` → ${tx.destination_name}`}
+                          </p>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {tx.piggy_bank_name && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-transfer/30 text-transfer">🏺 {tx.piggy_bank_name}</span>
+                            )}
+                            {tx.destination_piggy_bank_name && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-secondary/30 text-secondary">→ 🏺 {tx.destination_piggy_bank_name}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right ml-3 flex flex-col items-end">
+                          <span className={`text-sm font-semibold ${isNegative ? 'text-danger' : isTransfer ? 'text-transfer' : 'text-secondary'}`}>
+                            {isTransfer ? '±' : isNegative ? '−' : '+'}{formatCurrency(Math.abs(amount), currency)}
+                          </span>
+                          {tx.amount_usd != null && currency !== 'USD' && currency !== 'USDT' && (
+                            <span className="text-[10px] text-text-muted">≈ {formatCurrency(tx.amount_usd)} USD</span>
+                          )}
+                          <div className="flex gap-1 mt-1">
+                            <button onClick={() => startEdit(tx)} className="text-[10px] text-primary hover:underline">Editar</button>
+                            <button onClick={() => handleDeleteTx(tx.id)} className="text-[10px] text-danger hover:underline">Eliminar</button>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </>
           )}
         </div>
