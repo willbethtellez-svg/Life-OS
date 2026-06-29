@@ -566,8 +566,6 @@ export default function TransactionsPage() {
                       ))}
                     </tr>
                   </thead>
-                    </tr>
-                  </thead>
                   <tbody>
                     {transactions.map((tx: any) => {
                       const amount = parseFloat(tx.amount || '0');
