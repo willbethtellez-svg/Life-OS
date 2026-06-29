@@ -75,7 +75,7 @@ export default function RatesPage() {
   }, {} as Record<string, ExchangeRate>);
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
       <h1 className="text-xl font-bold">Tasas de Cambio</h1>
 
       <div className="bg-surface rounded-xl p-4 space-y-3">

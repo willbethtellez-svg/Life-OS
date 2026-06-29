@@ -50,7 +50,7 @@ export default function JarsPage() {
 
   if (selected) {
     return (
-      <div className="p-4 space-y-4 max-w-lg mx-auto">
+      <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
         <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text flex items-center gap-1 text-sm">← Volver</button>
         <div className="bg-surface rounded-xl p-4">
           <div className="flex items-center justify-between">
@@ -76,7 +76,7 @@ export default function JarsPage() {
   }
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Jarras / Fondos</h1>
         <button onClick={() => { resetForm(); setShowForm(!showForm); }}

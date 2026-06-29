@@ -78,7 +78,7 @@ export default function CategoriesPage() {
 
   if (selected) {
     return (
-      <div className="p-4 space-y-4 max-w-lg mx-auto">
+      <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
         <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text flex items-center gap-1 text-sm">← Volver</button>
         <div className="bg-surface rounded-xl p-4">
           <div className="flex items-center justify-between">
@@ -110,7 +110,7 @@ export default function CategoriesPage() {
   }
 
   return (
-    <div className="p-4 space-y-4 max-w-lg mx-auto">
+    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
       <h1 className="text-xl font-bold">Categorías</h1>
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>}
 
