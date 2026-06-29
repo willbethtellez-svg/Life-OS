@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '@/lib/db';
 import { formatCurrency, generateId } from '@/lib/utils';
 import type { PendingTransaction, CurrencyCode, TransactionType } from '@/types';
@@ -17,6 +17,10 @@ async function getVesRateForDate(date: string): Promise<number | null> {
   } catch { return null; }
 }
 
+const COLUMN_DEFAULTS: Record<string, number> = {
+  date: 100, description: 220, account: 160, category: 130, jar: 150, amount: 150, actions: 72,
+};
+
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,7 +31,12 @@ export default function TransactionsPage() {
   const [showFee, setShowFee] = useState(false);
   const [previewRate, setPreviewRate] = useState<number | null>(null);
   const [editingTx, setEditingTx] = useState<string | null>(null);
-  const [editingField, setEditingField] = useState<{ id: string; field: string } | null>(null);
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try { return { ...COLUMN_DEFAULTS, ...JSON.parse(localStorage.getItem('tx_col_widths') || '{}') }; }
+    catch { return { ...COLUMN_DEFAULTS }; }
+  });
+  const [popover, setPopover] = useState<{ id: string; field: string; options: { label: string; value: any }[]; rect: DOMRect } | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   const [form, setForm] = useState({
     amount: '',
@@ -194,12 +203,49 @@ export default function TransactionsPage() {
   async function handleInlineUpdate(txId: string, field: string, value: any) {
     try {
       await db.transactions.update(txId, { [field]: value });
-      setEditingField(null);
+      setPopover(null);
       fetchData();
     } catch (err) {
       console.error(err);
     }
   }
+
+  function startResize(col: string, e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = colWidths[col] || COLUMN_DEFAULTS[col] || 120;
+    function onMove(e: MouseEvent) {
+      const w = Math.max(60, startW + e.clientX - startX);
+      setColWidths(p => {
+        const next = { ...p, [col]: w };
+        localStorage.setItem('tx_col_widths', JSON.stringify(next));
+        return next;
+      });
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  function openPopover(id: string, field: string, options: { label: string; value: any }[], e: React.MouseEvent) {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPopover({ id, field, options, rect });
+  }
+
+  // Close popover on outside click
+  useEffect(() => {
+    if (!popover) return;
+    function onClick(e: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setPopover(null);
+      }
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [popover]);
 
   function startEdit(tx: any) {
     setForm({
@@ -496,16 +542,30 @@ export default function TransactionsPage() {
             <>
               {/* Desktop table */}
               <div className="hidden lg:block bg-surface rounded-xl border border-surface-light overflow-hidden">
-                <table className="w-full">
+                <table className="w-full" style={{ tableLayout: 'fixed' }}>
                   <thead>
                     <tr className="border-b border-surface-light">
-                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Fecha</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Descripción</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Cuenta</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Categoría</th>
-                      <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Jarra</th>
-                      <th className="text-right px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Monto</th>
-                      <th className="w-16 px-4 py-3"></th>
+                      {[
+                        { key: 'date', label: 'Fecha', align: 'text-left' },
+                        { key: 'description', label: 'Descripción', align: 'text-left' },
+                        { key: 'account', label: 'Cuenta', align: 'text-left' },
+                        { key: 'category', label: 'Categoría', align: 'text-left' },
+                        { key: 'jar', label: 'Jarra', align: 'text-left' },
+                        { key: 'amount', label: 'Monto', align: 'text-right' },
+                        { key: 'actions', label: '', align: 'text-center', noResize: true },
+                      ].map(col => (
+                        <th key={col.key}
+                          className={`px-3 py-3 text-xs font-medium text-text-muted uppercase tracking-wider ${col.align} select-none relative`}
+                          style={{ width: colWidths[col.key] || undefined, minWidth: col.noResize ? 72 : 60 }}>
+                          {col.label}
+                          {!col.noResize && (
+                            <div className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50"
+                              onMouseDown={e => startResize(col.key, e)} />
+                          )}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
                     </tr>
                   </thead>
                   <tbody>
@@ -519,84 +579,70 @@ export default function TransactionsPage() {
 
                       return (
                         <tr key={tx.id} className={`border-b border-surface-light last:border-0 hover:bg-surface-light/30 transition-colors ${isFee ? 'opacity-50' : ''}`}>
-                          <td className="px-4 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
-                          <td className="px-4 py-3">
-                            <p className="text-sm font-medium truncate max-w-[200px]">
+                          <td className="px-3 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
+                          <td className="px-3 py-3">
+                            <p className="text-sm font-medium truncate" style={{ maxWidth: colWidths.description - 24 || 196 }}>
                               {isFee && <span className="text-text-muted mr-1">↳</span>}
                               {isTransfer && <span className="text-transfer mr-1">⟷</span>}
                               {desc}
                             </p>
                           </td>
-                          <td className="px-4 py-3 text-sm text-text-muted">
-                            {tx.source_name}
-                            {isTransfer && tx.destination_name && <span className="text-text-muted/50 mx-1">→</span>}
-                            {isTransfer && tx.destination_name && <span className="text-text-muted">{tx.destination_name}</span>}
-                          </td>
-                          <td className="px-4 py-3">
-                            {editingField?.id === tx.id && editingField?.field === 'category' ? (
-                              <select autoFocus value={tx.category_id || ''}
-                                onChange={e => handleInlineUpdate(tx.id, 'category_id', e.target.value || null)}
-                                onBlur={() => setEditingField(null)}
-                                className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none">
-                                <option value="">Sin categoría</option>
-                                {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                              </select>
-                            ) : (
-                              <button onClick={() => setEditingField({ id: tx.id, field: 'category' })}
-                                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                                  tx.category_name
-                                    ? 'border-primary/30 text-primary bg-primary/5 hover:bg-primary/10'
-                                    : 'border-surface-light text-text-muted hover:border-text-muted'
-                                }`}>
-                                {tx.category_name || '+ Categoría'}
-                              </button>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
+                          {/* Account chip */}
+                          <td className="px-3 py-3">
                             <div className="flex flex-wrap gap-1">
-                              {/* Source jar */}
-                              {editingField?.id === tx.id && editingField?.field === 'piggy' ? (
-                                <select autoFocus value={tx.piggy_bank_id || ''}
-                                  onChange={e => handleInlineUpdate(tx.id, 'piggy_bank_id', e.target.value || null)}
-                                  onBlur={() => setEditingField(null)}
-                                  className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none">
-                                  <option value="">Sin jarra</option>
-                                  {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name}</option>)}
-                                </select>
-                              ) : (
-                                <button onClick={() => setEditingField({ id: tx.id, field: 'piggy' })}
-                                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                                    tx.piggy_bank_name
-                                      ? 'border-transfer/30 text-transfer bg-transfer/5 hover:bg-transfer/10'
-                                      : 'border-surface-light text-text-muted hover:border-text-muted'
-                                  }`}>
-                                  {tx.piggy_bank_name ? `🏺 ${tx.piggy_bank_name}` : '+ Jarra'}
-                                </button>
-                              )}
-                              {/* Destination jar (transfer) */}
+                              <button onClick={e => openPopover(tx.id, 'source_account_id',
+                                [{ label: 'Sin cuenta', value: null }, ...accounts.map(a => ({ label: `${a.name} (${a.currency})`, value: a.id }))], e)}
+                                className="text-xs px-2 py-0.5 rounded-full border border-surface-light text-text-muted hover:border-text-muted">
+                                {tx.source_name || (tx.type === 'deposit' ? tx.destination_name : 'Seleccionar')}
+                              </button>
                               {isTransfer && (
-                                editingField?.id === tx.id && editingField?.field === 'destPiggy' ? (
-                                  <select autoFocus value={tx.destination_piggy_bank_id || ''}
-                                    onChange={e => handleInlineUpdate(tx.id, 'destination_piggy_bank_id', e.target.value || null)}
-                                    onBlur={() => setEditingField(null)}
-                                    className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none">
-                                    <option value="">Sin jarra destino</option>
-                                    {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name}</option>)}
-                                  </select>
-                                ) : (
-                                  <button onClick={() => setEditingField({ id: tx.id, field: 'destPiggy' })}
-                                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                                      tx.destination_piggy_bank_name
-                                        ? 'border-secondary/30 text-secondary bg-secondary/5 hover:bg-secondary/10'
-                                        : 'border-surface-light text-text-muted hover:border-text-muted'
-                                    }`}>
-                                    {tx.destination_piggy_bank_name ? `→ 🏺 ${tx.destination_piggy_bank_name}` : '+ Jarra dest'}
-                                  </button>
-                                )
+                                <button onClick={e => openPopover(tx.id, 'destination_account_id',
+                                  [{ label: 'Sin destino', value: null }, ...accounts.map(a => ({ label: `${a.name} (${a.currency})`, value: a.id }))], e)}
+                                  className="text-xs px-2 py-0.5 rounded-full border border-surface-light text-text-muted hover:border-text-muted">
+                                  {tx.destination_name || 'Destino'}
+                                </button>
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-right">
+                          {/* Category chip */}
+                          <td className="px-3 py-3">
+                            <button onClick={e => openPopover(tx.id, 'category_id',
+                              [{ label: 'Sin categoría', value: null }, ...categories.map(c => ({ label: c.name, value: c.id }))], e)}
+                              className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                tx.category_name
+                                  ? 'border-primary/30 text-primary bg-primary/5 hover:bg-primary/10'
+                                  : 'border-surface-light text-text-muted hover:border-text-muted'
+                              }`}>
+                              {tx.category_name || '+ Categoría'}
+                            </button>
+                          </td>
+                          {/* Jar chips */}
+                          <td className="px-3 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              <button onClick={e => openPopover(tx.id, 'piggy_bank_id',
+                                [{ label: 'Sin jarra', value: null }, ...jars.map(j => ({ label: `${j.name} (${formatCurrency(j.current_amount || 0, j.currency)})`, value: j.id }))], e)}
+                                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                  tx.piggy_bank_name
+                                    ? 'border-transfer/30 text-transfer bg-transfer/5 hover:bg-transfer/10'
+                                    : 'border-surface-light text-text-muted hover:border-text-muted'
+                                }`}>
+                                {tx.piggy_bank_name ? `🏺 ${tx.piggy_bank_name}` : '+ Jarra'}
+                              </button>
+                              {isTransfer && (
+                                <button onClick={e => openPopover(tx.id, 'destination_piggy_bank_id',
+                                  [{ label: 'Sin jarra destino', value: null }, ...jars.map(j => ({ label: `${j.name} (${formatCurrency(j.current_amount || 0, j.currency)})`, value: j.id }))], e)}
+                                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                    tx.destination_piggy_bank_name
+                                      ? 'border-secondary/30 text-secondary bg-secondary/5 hover:bg-secondary/10'
+                                      : 'border-surface-light text-text-muted hover:border-text-muted'
+                                  }`}>
+                                  {tx.destination_piggy_bank_name ? `→ 🏺 ${tx.destination_piggy_bank_name}` : '+ Jarra dest'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          {/* Amount */}
+                          <td className="px-3 py-3 text-right">
                             <div className="flex flex-col items-end">
                               <span className={`text-sm font-semibold ${
                                 isNegative ? 'text-danger' : isTransfer ? 'text-transfer' : 'text-secondary'
@@ -614,8 +660,9 @@ export default function TransactionsPage() {
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-1">
+                          {/* Actions */}
+                          <td className="px-3 py-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
                               <button onClick={() => startEdit(tx)} className="text-text-muted hover:text-primary p-1" title="Editar">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                               </button>
@@ -629,6 +676,20 @@ export default function TransactionsPage() {
                     })}
                   </tbody>
                 </table>
+
+                {/* Popover flotante para chips */}
+                {popover && (
+                  <div ref={popoverRef}
+                    className="fixed z-50 bg-surface border border-surface-light rounded-lg shadow-xl py-1 min-w-[170px] max-h-[220px] overflow-y-auto"
+                    style={{ left: popover.rect.left, top: popover.rect.bottom + 4 }}>
+                    {popover.options.map((opt, i) => (
+                      <button key={i} onClick={() => handleInlineUpdate(popover.id, popover.field, opt.value)}
+                        className="w-full text-left px-3 py-2 text-sm text-text hover:bg-surface-light transition-colors">
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Mobile card list */}
