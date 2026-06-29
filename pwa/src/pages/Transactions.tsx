@@ -533,63 +533,66 @@ export default function TransactionsPage() {
                             {isTransfer && tx.destination_name && <span className="text-text-muted">{tx.destination_name}</span>}
                           </td>
                           <td className="px-4 py-3">
-                            {tx.type !== 'transfer' ? (
-                              editingField?.id === tx.id && editingField?.field === 'category' ? (
-                                <select
-                                  autoFocus
-                                  value={tx.category_id || ''}
-                                  onChange={e => handleInlineUpdate(tx.id, 'category_id', e.target.value || null)}
-                                  onBlur={() => setEditingField(null)}
-                                  className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none"
-                                >
-                                  <option value="">Sin categoría</option>
-                                  {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
-                              ) : (
-                                <button onClick={() => setEditingField({ id: tx.id, field: 'category' })}
-                                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                                    tx.category_name
-                                      ? 'border-primary/30 text-primary bg-primary/5 hover:bg-primary/10'
-                                      : 'border-surface-light text-text-muted hover:border-text-muted'
-                                  }`}>
-                                  {tx.category_name || '+'}
-                                </button>
-                              )
+                            {editingField?.id === tx.id && editingField?.field === 'category' ? (
+                              <select autoFocus value={tx.category_id || ''}
+                                onChange={e => handleInlineUpdate(tx.id, 'category_id', e.target.value || null)}
+                                onBlur={() => setEditingField(null)}
+                                className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none">
+                                <option value="">Sin categoría</option>
+                                {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                              </select>
                             ) : (
-                              <span className="text-xs text-text-muted">—</span>
+                              <button onClick={() => setEditingField({ id: tx.id, field: 'category' })}
+                                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                  tx.category_name
+                                    ? 'border-primary/30 text-primary bg-primary/5 hover:bg-primary/10'
+                                    : 'border-surface-light text-text-muted hover:border-text-muted'
+                                }`}>
+                                {tx.category_name || '+ Categoría'}
+                              </button>
                             )}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex flex-wrap gap-1">
-                              {tx.piggy_bank_name && (
-                                editingField?.id === tx.id && editingField?.field === 'piggy' ? (
-                                  <select
-                                    autoFocus
-                                    value={tx.piggy_bank_id || ''}
-                                    onChange={e => handleInlineUpdate(tx.id, 'piggy_bank_id', e.target.value || null)}
+                              {/* Source jar */}
+                              {editingField?.id === tx.id && editingField?.field === 'piggy' ? (
+                                <select autoFocus value={tx.piggy_bank_id || ''}
+                                  onChange={e => handleInlineUpdate(tx.id, 'piggy_bank_id', e.target.value || null)}
+                                  onBlur={() => setEditingField(null)}
+                                  className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none">
+                                  <option value="">Sin jarra</option>
+                                  {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name}</option>)}
+                                </select>
+                              ) : (
+                                <button onClick={() => setEditingField({ id: tx.id, field: 'piggy' })}
+                                  className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                    tx.piggy_bank_name
+                                      ? 'border-transfer/30 text-transfer bg-transfer/5 hover:bg-transfer/10'
+                                      : 'border-surface-light text-text-muted hover:border-text-muted'
+                                  }`}>
+                                  {tx.piggy_bank_name ? `🏺 ${tx.piggy_bank_name}` : '+ Jarra'}
+                                </button>
+                              )}
+                              {/* Destination jar (transfer) */}
+                              {isTransfer && (
+                                editingField?.id === tx.id && editingField?.field === 'destPiggy' ? (
+                                  <select autoFocus value={tx.destination_piggy_bank_id || ''}
+                                    onChange={e => handleInlineUpdate(tx.id, 'destination_piggy_bank_id', e.target.value || null)}
                                     onBlur={() => setEditingField(null)}
-                                    className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none"
-                                  >
-                                    <option value="">Sin jarra</option>
+                                    className="bg-background border border-primary rounded px-1.5 py-0.5 text-xs text-text focus:outline-none">
+                                    <option value="">Sin jarra destino</option>
                                     {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name}</option>)}
                                   </select>
                                 ) : (
-                                  <button onClick={() => setEditingField({ id: tx.id, field: 'piggy' })}
-                                    className="text-xs px-2 py-0.5 rounded-full border border-transfer/30 text-transfer bg-transfer/5 hover:bg-transfer/10">
-                                    🏺 {tx.piggy_bank_name}
+                                  <button onClick={() => setEditingField({ id: tx.id, field: 'destPiggy' })}
+                                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                      tx.destination_piggy_bank_name
+                                        ? 'border-secondary/30 text-secondary bg-secondary/5 hover:bg-secondary/10'
+                                        : 'border-surface-light text-text-muted hover:border-text-muted'
+                                    }`}>
+                                    {tx.destination_piggy_bank_name ? `→ 🏺 ${tx.destination_piggy_bank_name}` : '+ Jarra dest'}
                                   </button>
                                 )
-                              )}
-                              {tx.destination_piggy_bank_name && (
-                                <span className="text-xs px-2 py-0.5 rounded-full border border-secondary/30 text-secondary bg-secondary/5">
-                                  → 🏺 {tx.destination_piggy_bank_name}
-                                </span>
-                              )}
-                              {!tx.piggy_bank_name && !tx.destination_piggy_bank_name && (
-                                <button onClick={() => setEditingField({ id: tx.id, field: 'piggy' })}
-                                  className="text-xs text-text-muted hover:text-text">
-                                  +
-                                </button>
                               )}
                             </div>
                           </td>

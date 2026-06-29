@@ -76,13 +76,22 @@ export default function AccountsPage() {
     } catch (err) { console.error(err); }
   }
 
+  function getAmountForAccount(tx: any): number {
+    // For a transfer TO this account, use foreign_amount (destination currency)
+    // For a transfer FROM this account, use amount (source currency)
+    if (tx.type === 'transfer' && tx.destination_account_id === selected?.id && tx.foreign_amount) {
+      return parseFloat(String(tx.foreign_amount));
+    }
+    return parseFloat(tx.amount || '0');
+  }
+
   function computeRunningBalance(tx: any, index: number): number {
     const initial = parseFloat(selected?.initial_balance || '0');
     let balance = initial;
     for (let i = 0; i <= index; i++) {
       const t = txHistory[i];
       if (!t) continue;
-      const amt = parseFloat(t.amount || '0');
+      const amt = getAmountForAccount(t);
       if (t.source_account_id === selected?.id) {
         balance -= amt;
       }
@@ -192,7 +201,7 @@ export default function AccountsPage() {
                   <tr><td colSpan={5} className="text-center py-8 text-text-muted text-sm">Sin movimientos</td></tr>
                 ) : (
                   txHistory.map((tx: any, i: number) => {
-                    const amount = parseFloat(tx.amount || '0');
+                    const amount = getAmountForAccount(tx);
                     const isDebit = tx.destination_account_id === selected.id; // ingresa a esta cuenta
                     const isCredit = tx.source_account_id === selected.id; // sale de esta cuenta
                     const running = computeRunningBalance(tx, i);
@@ -229,7 +238,7 @@ export default function AccountsPage() {
               <div className="text-center py-8 text-text-muted"><p className="text-sm">Sin movimientos</p></div>
             ) : (
               txHistory.map((tx: any, i: number) => {
-                const amount = parseFloat(tx.amount || '0');
+                const amount = getAmountForAccount(tx);
                 const isDebit = tx.destination_account_id === selected.id;
                 const isCredit = tx.source_account_id === selected.id;
                 const running = computeRunningBalance(tx, i);

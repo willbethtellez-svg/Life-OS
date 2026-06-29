@@ -42,6 +42,35 @@ async function convertCurrency(amount: number, from: string, to: string, date?: 
   return usdAmount * rate;
 }
 
+async function enrichTransaction(tx: any): Promise<any> {
+  let categoryName: string | null = null;
+  let sourceName: string | null = null;
+  let destName: string | null = null;
+  let piggyName: string | null = null;
+  let destPiggyName: string | null = null;
+  if (tx.category_id) {
+    const { data: cat } = await supabase.from('categories').select('name').eq('id', tx.category_id).single();
+    categoryName = cat?.name || null;
+  }
+  if (tx.source_account_id) {
+    const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.source_account_id).single();
+    sourceName = acc?.name || null;
+  }
+  if (tx.destination_account_id) {
+    const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.destination_account_id).single();
+    destName = acc?.name || null;
+  }
+  if (tx.piggy_bank_id) {
+    const { data: jar } = await supabase.from('piggy_banks').select('name').eq('id', tx.piggy_bank_id).single();
+    piggyName = jar?.name || null;
+  }
+  if (tx.destination_piggy_bank_id) {
+    const { data: jar } = await supabase.from('piggy_banks').select('name').eq('id', tx.destination_piggy_bank_id).single();
+    destPiggyName = jar?.name || null;
+  }
+  return { ...tx, category_name: categoryName, source_name: sourceName, destination_name: destName, piggy_bank_name: piggyName, destination_piggy_bank_name: destPiggyName };
+}
+
 export const db = {
   // ─── ACCOUNTS ──────────────────────────────────────────────
   accounts: {
@@ -68,7 +97,7 @@ export const db = {
       if (params?.end) q = q.lte('date', params.end);
       const { data, error } = await q;
       if (error) throw error;
-      return data || [];
+      return await Promise.all((data || []).map(enrichTransaction));
     },
     create: async (account: Partial<Account>): Promise<Account> => {
       const user = await getUser();
@@ -97,25 +126,7 @@ export const db = {
       if (params?.type) q = q.eq('type', params.type);
       const { data, error } = await q;
       if (error) throw error;
-      // Enrich with category name and account names
-      const enriched = await Promise.all((data || []).map(async (tx) => {
-        let categoryName: string | null = null;
-        let sourceName: string | null = null;
-        let destName: string | null = null;
-        if (tx.category_id) {
-          const { data: cat } = await supabase.from('categories').select('name').eq('id', tx.category_id).single();
-          categoryName = cat?.name || null;
-        }
-        if (tx.source_account_id) {
-          const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.source_account_id).single();
-          sourceName = acc?.name || null;
-        }
-        if (tx.destination_account_id) {
-          const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.destination_account_id).single();
-          destName = acc?.name || null;
-        }
-        return { ...tx, category_name: categoryName, source_name: sourceName, destination_name: destName };
-      }));
+      const enriched = await Promise.all((data || []).map(enrichTransaction));
       return enriched;
     },
     get: async (id: string): Promise<Transaction | null> => {
