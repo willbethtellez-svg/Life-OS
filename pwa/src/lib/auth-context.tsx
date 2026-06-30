@@ -1,54 +1,49 @@
-'use client';
-
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { supabase } from '@/lib/supabase';
+import type { User } from '@supabase/supabase-js';
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  token: string;
-  baseUrl: string;
-  login: (token: string, baseUrl: string) => void;
-  logout: () => void;
+  user: User | null;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  signup: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const STORAGE_KEY = 'lifeos_auth';
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [token, setToken] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        const { token: t, baseUrl: b } = JSON.parse(stored);
-        if (t && b) {
-          setToken(t);
-          setBaseUrl(b);
-          setIsAuthenticated(true);
-        }
-      } catch { }
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
-  const login = useCallback((newToken: string, newBaseUrl: string) => {
-    setToken(newToken);
-    setBaseUrl(newBaseUrl);
-    setIsAuthenticated(true);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ token: newToken, baseUrl: newBaseUrl }));
+  const login = useCallback(async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
   }, []);
 
-  const logout = useCallback(() => {
-    setToken('');
-    setBaseUrl('');
-    setIsAuthenticated(false);
-    localStorage.removeItem(STORAGE_KEY);
+  const signup = useCallback(async (email: string, password: string) => {
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) throw error;
+  }, []);
+
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, token, baseUrl, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated: !!user, user, loading, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );
