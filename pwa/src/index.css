@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #070d18;
+  --color-surface: #0e1827;
+  --color-surface-light: #1a2535;
+  --color-surface-elevated: #162032;
+  --color-primary: #16a34a;
+  --color-primary-dark: #14532d;
+  --color-secondary: #22c55e;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-transfer: #3b82f6;
+  --color-text: #e2e8f0;
+  --color-text-muted: #64748b;
+  --color-text-secondary: #94a3b8;
+  --sidebar-width: 260px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.sidebar-open {
+  overflow: hidden;
+}
+
+@media (min-width: 1024px) {
+  body.sidebar-open {
+    overflow: auto;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-light);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Input / Select reset */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.4);
+}
