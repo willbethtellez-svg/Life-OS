@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import type {
   Account, Transaction, Category, Budget, PiggyBank, Liability,
   ExchangeRate, AccountAcquisition, HouseholdTask, MaintenanceLog,
-  VehicleRecord, BabyRecord, PendingTransaction,
+  VehicleRecord, BabyRecord, PendingTransaction, LiabilityMovement,
 } from '@/types';
 
 async function getUser() {
@@ -10,11 +10,10 @@ async function getUser() {
   return user;
 }
 
-// Convierte un monto de cualquier moneda a USD usando la tasa del día de la transacción
+// Convierte un monto de cualquier moneda a USD
 async function toUSD(amount: number, currency: string, date?: string): Promise<number> {
   if (currency === 'USD' || currency === 'USDT') return amount;
   const txDate = date || new Date().toISOString().split('T')[0];
-  // Buscar tasa donde to_currency = currency (ej: USDT → VES, rate=50 → 100/50=2 USD)
   const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
   let rate = rates?.find(r => r.to_currency === currency)?.rate;
   if (!rate) {
@@ -30,7 +29,6 @@ async function convertCurrency(amount: number, from: string, to: string, date?: 
   if (from === to) return amount;
   const usdAmount = await toUSD(amount, from, date);
   if (to === 'USD' || to === 'USDT') return usdAmount;
-  // Convertir USD → to: buscar tasa donde to_currency = to, multiplicar
   const txDate = date || new Date().toISOString().split('T')[0];
   const { data: rates } = await supabase.from('exchange_rates').select('*').eq('date', txDate);
   let rate = rates?.find(r => r.to_currency === to)?.rate;
@@ -42,33 +40,42 @@ async function convertCurrency(amount: number, from: string, to: string, date?: 
   return usdAmount * rate;
 }
 
-async function enrichTransaction(tx: any): Promise<any> {
-  let categoryName: string | null = null;
-  let sourceName: string | null = null;
-  let destName: string | null = null;
-  let piggyName: string | null = null;
-  let destPiggyName: string | null = null;
-  if (tx.category_id) {
-    const { data: cat } = await supabase.from('categories').select('name').eq('id', tx.category_id).single();
-    categoryName = cat?.name || null;
-  }
-  if (tx.source_account_id) {
-    const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.source_account_id).single();
-    sourceName = acc?.name || null;
-  }
-  if (tx.destination_account_id) {
-    const { data: acc } = await supabase.from('accounts').select('name').eq('id', tx.destination_account_id).single();
-    destName = acc?.name || null;
-  }
-  if (tx.piggy_bank_id) {
-    const { data: jar } = await supabase.from('piggy_banks').select('name').eq('id', tx.piggy_bank_id).single();
-    piggyName = jar?.name || null;
-  }
-  if (tx.destination_piggy_bank_id) {
-    const { data: jar } = await supabase.from('piggy_banks').select('name').eq('id', tx.destination_piggy_bank_id).single();
-    destPiggyName = jar?.name || null;
-  }
-  return { ...tx, category_name: categoryName, source_name: sourceName, destination_name: destName, piggy_bank_name: piggyName, destination_piggy_bank_name: destPiggyName };
+// Batch enrichment — O(3 queries) regardless of list size, replaces the old O(n*5) approach
+async function enrichTransactions(txs: any[]): Promise<any[]> {
+  if (txs.length === 0) return txs;
+
+  const accountIds = [...new Set(
+    txs.flatMap(t => [t.source_account_id, t.destination_account_id]).filter(Boolean)
+  )];
+  const categoryIds = [...new Set(txs.map(t => t.category_id).filter(Boolean))];
+  const jarIds = [...new Set(
+    txs.flatMap(t => [t.piggy_bank_id, t.destination_piggy_bank_id]).filter(Boolean)
+  )];
+
+  const [accRes, catRes, jarRes] = await Promise.all([
+    accountIds.length
+      ? supabase.from('accounts').select('id,name').in('id', accountIds)
+      : Promise.resolve({ data: [] }),
+    categoryIds.length
+      ? supabase.from('categories').select('id,name').in('id', categoryIds)
+      : Promise.resolve({ data: [] }),
+    jarIds.length
+      ? supabase.from('piggy_banks').select('id,name').in('id', jarIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const accMap = new Map((accRes.data || []).map((a: any) => [a.id, a.name]));
+  const catMap = new Map((catRes.data || []).map((c: any) => [c.id, c.name]));
+  const jarMap = new Map((jarRes.data || []).map((j: any) => [j.id, j.name]));
+
+  return txs.map(tx => ({
+    ...tx,
+    category_name: tx.category_id ? catMap.get(tx.category_id) ?? null : null,
+    source_name: tx.source_account_id ? accMap.get(tx.source_account_id) ?? null : null,
+    destination_name: tx.destination_account_id ? accMap.get(tx.destination_account_id) ?? null : null,
+    piggy_bank_name: tx.piggy_bank_id ? jarMap.get(tx.piggy_bank_id) ?? null : null,
+    destination_piggy_bank_name: tx.destination_piggy_bank_id ? jarMap.get(tx.destination_piggy_bank_id) ?? null : null,
+  }));
 }
 
 export const db = {
@@ -91,13 +98,13 @@ export const db = {
         .from('transactions')
         .select('*')
         .or(`source_account_id.eq.${id},destination_account_id.eq.${id}`)
-        .order('date', { ascending: false });
+        .order('date', { ascending: true });
       if (params?.limit) q = q.limit(params.limit);
       if (params?.start) q = q.gte('date', params.start);
       if (params?.end) q = q.lte('date', params.end);
       const { data, error } = await q;
       if (error) throw error;
-      return await Promise.all((data || []).map(enrichTransaction));
+      return await enrichTransactions(data || []);
     },
     create: async (account: Partial<Account>): Promise<Account> => {
       const user = await getUser();
@@ -126,8 +133,7 @@ export const db = {
       if (params?.type) q = q.eq('type', params.type);
       const { data, error } = await q;
       if (error) throw error;
-      const enriched = await Promise.all((data || []).map(enrichTransaction));
-      return enriched;
+      return await enrichTransactions(data || []);
     },
     get: async (id: string): Promise<Transaction | null> => {
       const { data, error } = await supabase.from('transactions').select('*').eq('id', id).single();
@@ -141,7 +147,6 @@ export const db = {
       const txCurrency = tx.currency || 'USD';
       const txDate = tx.date || new Date().toISOString().split('T')[0];
 
-      // Calculate amount_usd at write time
       const amountUsd = await toUSD(amount, txCurrency, txDate);
 
       const { data, error } = await supabase.from('transactions').insert({
@@ -168,7 +173,14 @@ export const db = {
         }
       }
 
-      // Update jar amounts (convert to jar's currency using transaction date's rate)
+      // Update jar amounts
+      // deposit → piggyId: income goes TO the jar (increment)
+      if (piggyId && type === 'deposit') {
+        const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', piggyId).single();
+        const jarAmt = await convertCurrency(amount, txCurrency, jar?.currency || 'USD', txDate);
+        await supabase.rpc('increment_jar', { jar_id: piggyId, amt: jarAmt });
+      }
+      // withdrawal → piggyId: expense comes FROM the jar (decrement)
       if (piggyId && (type === 'withdrawal' || type === 'transfer')) {
         const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', piggyId).single();
         const jarAmt = await convertCurrency(amount, txCurrency, jar?.currency || 'USD', txDate);
@@ -190,7 +202,6 @@ export const db = {
       return data;
     },
     update: async (id: string, updates: Partial<Transaction>): Promise<Transaction> => {
-      // Get original transaction to reverse its effects
       const { data: orig } = await supabase.from('transactions').select('*').eq('id', id).single();
       if (orig) {
         const origAmt = parseFloat(String(orig.amount || 0));
@@ -208,6 +219,12 @@ export const db = {
           }
         }
         // Reverse original jar changes
+        if (orig.piggy_bank_id && orig.type === 'deposit') {
+          // Reverse: deposit had incremented the jar, so decrement to undo
+          const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.piggy_bank_id).single();
+          const jarAmt = await convertCurrency(origAmt, origCurrency, jar?.currency || 'USD', orig.date);
+          await supabase.rpc('decrement_jar', { jar_id: orig.piggy_bank_id, amt: jarAmt });
+        }
         if (orig.piggy_bank_id && (orig.type === 'withdrawal' || orig.type === 'transfer')) {
           const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.piggy_bank_id).single();
           const jarAmt = await convertCurrency(origAmt, origCurrency, jar?.currency || 'USD', orig.date);
@@ -224,7 +241,6 @@ export const db = {
         }
       }
 
-      // Calculate new amount_usd
       const newAmount = parseFloat(String(updates.amount ?? orig?.amount ?? 0));
       const newCurrency = updates.currency ?? orig?.currency ?? 'USD';
       const newDate = updates.date ?? orig?.date ?? new Date().toISOString().split('T')[0];
@@ -235,7 +251,6 @@ export const db = {
       }).eq('id', id).select().single();
       if (error) throw error;
 
-      // Apply new transaction effects
       const amount = newAmount;
       const type = updates.type ?? orig?.type;
       const txCurrency = newCurrency;
@@ -259,6 +274,11 @@ export const db = {
         }
       }
 
+      if (piggyId && type === 'deposit') {
+        const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', piggyId).single();
+        const jarAmt = await convertCurrency(amount, txCurrency, jar?.currency || 'USD', txDate);
+        await supabase.rpc('increment_jar', { jar_id: piggyId, amt: jarAmt });
+      }
       if (piggyId && (type === 'withdrawal' || type === 'transfer')) {
         const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', piggyId).single();
         const jarAmt = await convertCurrency(amount, txCurrency, jar?.currency || 'USD', txDate);
@@ -280,7 +300,6 @@ export const db = {
       return data;
     },
     delete: async (id: string): Promise<void> => {
-      // Reverse balance changes before deleting
       const { data: orig } = await supabase.from('transactions').select('*').eq('id', id).single();
       if (orig) {
         const origAmt = parseFloat(String(orig.amount || 0));
@@ -296,7 +315,12 @@ export const db = {
             await supabase.rpc('decrement_balance', { acc_id: orig.destination_account_id, amt: origForeign });
           }
         }
-        // Reverse jar changes (using original date's rate)
+        // Reverse jar changes
+        if (orig.piggy_bank_id && orig.type === 'deposit') {
+          const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.piggy_bank_id).single();
+          const jarAmt = await convertCurrency(origAmt, origCurrency, jar?.currency || 'USD', orig.date);
+          await supabase.rpc('decrement_jar', { jar_id: orig.piggy_bank_id, amt: jarAmt });
+        }
         if (orig.piggy_bank_id && (orig.type === 'withdrawal' || orig.type === 'transfer')) {
           const { data: jar } = await supabase.from('piggy_banks').select('currency').eq('id', orig.piggy_bank_id).single();
           const jarAmt = await convertCurrency(origAmt, origCurrency, jar?.currency || 'USD', orig.date);
@@ -408,6 +432,18 @@ export const db = {
       if (error) throw error;
       return data;
     },
+    transactions: async (jarId: string, params?: { start?: string; end?: string }): Promise<Transaction[]> => {
+      let q = supabase
+        .from('transactions')
+        .select('*')
+        .or(`piggy_bank_id.eq.${jarId},destination_piggy_bank_id.eq.${jarId}`)
+        .order('date', { ascending: true });
+      if (params?.start) q = q.gte('date', params.start);
+      if (params?.end) q = q.lte('date', params.end);
+      const { data, error } = await q;
+      if (error) throw error;
+      return await enrichTransactions(data || []);
+    },
     create: async (jar: Partial<PiggyBank>): Promise<PiggyBank> => {
       const user = await getUser();
       const { data, error } = await supabase.from('piggy_banks').insert({ ...jar, user_id: user?.id }).select().single();
@@ -423,8 +459,10 @@ export const db = {
 
   // ─── LIABILITIES ───────────────────────────────────────────
   liabilities: {
-    list: async (): Promise<Liability[]> => {
-      const { data, error } = await supabase.from('liabilities').select('*').order('name');
+    list: async (includeArchived = false): Promise<Liability[]> => {
+      let q = supabase.from('liabilities').select('*').order('name');
+      if (!includeArchived) q = q.eq('archived', false);
+      const { data, error } = await q;
       if (error) throw error;
       return data || [];
     },
@@ -446,6 +484,65 @@ export const db = {
     },
     delete: async (id: string): Promise<void> => {
       const { error } = await supabase.from('liabilities').delete().eq('id', id);
+      if (error) throw error;
+    },
+    archive: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('liabilities').update({
+        archived: true,
+        paid_date: new Date().toISOString().split('T')[0],
+        current_balance: 0,
+      }).eq('id', id);
+      if (error) throw error;
+    },
+    movements: async (liabilityId: string): Promise<LiabilityMovement[]> => {
+      const { data, error } = await supabase
+        .from('liability_movements')
+        .select('*')
+        .eq('liability_id', liabilityId)
+        .order('date', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+    addMovement: async (movement: Omit<LiabilityMovement, 'id' | 'user_id' | 'created_at'>): Promise<LiabilityMovement> => {
+      const user = await getUser();
+      const { data, error } = await supabase
+        .from('liability_movements')
+        .insert({ ...movement, user_id: user?.id })
+        .select()
+        .single();
+      if (error) throw error;
+
+      // Update the liability balance
+      const { data: liab } = await supabase
+        .from('liabilities')
+        .select('current_balance')
+        .eq('id', movement.liability_id)
+        .single();
+
+      const currentBalance = parseFloat(liab?.current_balance || '0');
+      const newBalance = movement.type === 'payment'
+        ? Math.max(0, currentBalance - movement.amount)
+        : currentBalance + movement.amount;
+
+      await supabase.from('liabilities').update({ current_balance: newBalance }).eq('id', movement.liability_id);
+
+      return data;
+    },
+    deleteMovement: async (movementId: string, liabilityId: string, amount: number, type: string): Promise<void> => {
+      // Reverse the balance effect before deleting
+      const { data: liab } = await supabase
+        .from('liabilities')
+        .select('current_balance')
+        .eq('id', liabilityId)
+        .single();
+
+      const currentBalance = parseFloat(liab?.current_balance || '0');
+      const newBalance = type === 'payment'
+        ? currentBalance + amount  // restore what was paid
+        : Math.max(0, currentBalance - amount);  // remove what was added
+
+      await supabase.from('liabilities').update({ current_balance: newBalance }).eq('id', liabilityId);
+      const { error } = await supabase.from('liability_movements').delete().eq('id', movementId);
       if (error) throw error;
     },
   },
@@ -594,10 +691,9 @@ export const db = {
     },
   },
 
-  // ─── PENDING TRANSACTIONS (kept in Supabase) ──────────────
+  // ─── PENDING TRANSACTIONS ──────────────────────────────────
   pendingTransactions: {
     getAll: async (): Promise<PendingTransaction[]> => {
-      // Pending transactions are stored in localStorage (simple, no auth needed)
       try {
         const raw = localStorage.getItem('lifeos_pending_txs');
         return raw ? JSON.parse(raw) : [];

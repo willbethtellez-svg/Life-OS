@@ -86,6 +86,21 @@ export interface Liability {
   currency: CurrencyCode;
   start_date: string | null;
   due_date: string | null;
+  archived: boolean;
+  paid_date: string | null;
+  created_at: string;
+}
+
+export interface LiabilityMovement {
+  id: string;
+  user_id: string;
+  liability_id: string;
+  date: string;
+  type: 'initial' | 'payment' | 'increase' | 'interest';
+  amount: number;
+  currency: string;
+  notes: string;
+  transaction_id: string | null;
   created_at: string;
 }
 

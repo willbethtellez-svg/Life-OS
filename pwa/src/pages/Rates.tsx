@@ -50,11 +50,19 @@ export default function RatesPage() {
     } catch { setMessage('Error al agregar tasas'); }
   }
 
+  const [historyFilter, setHistoryFilter] = useState('');
+
+  const allPairs = [...new Set(rates.map(r => `${r.from_currency}→${r.to_currency}`))].sort();
+
   const latestRates = rates.reduce((acc, r) => {
     const key = `${r.from_currency}→${r.to_currency}`;
     if (!acc[key] || r.date > acc[key].date) acc[key] = r;
     return acc;
   }, {} as Record<string, ExchangeRate>);
+
+  const filteredHistory = historyFilter
+    ? rates.filter(r => `${r.from_currency}→${r.to_currency}` === historyFilter)
+    : rates;
 
   return (
     <div className="p-4 lg:p-6 space-y-4 max-w-lg">
@@ -121,12 +129,22 @@ export default function RatesPage() {
       {/* Historial */}
       <Card>
         <CardHeader>
-          <CardTitle>Historial</CardTitle>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <CardTitle>Historial</CardTitle>
+            {allPairs.length > 1 && (
+              <Select value={historyFilter} onChange={e => setHistoryFilter(e.target.value)} className="text-xs py-1.5 w-auto">
+                <option value="">Todos los pares</option>
+                {allPairs.map(pair => (
+                  <option key={pair} value={pair}>{pair}</option>
+                ))}
+              </Select>
+            )}
+          </div>
         </CardHeader>
         <div className="space-y-0 divide-y divide-surface-light/50">
-          {rates.length === 0 ? (
-            <p className="text-text-muted text-sm text-center py-3">Sin historial</p>
-          ) : rates.slice(0, 20).map((rate, idx) => (
+          {filteredHistory.length === 0 ? (
+            <p className="text-text-muted text-sm text-center py-3">Sin historial{historyFilter ? ` para ${historyFilter}` : ''}</p>
+          ) : filteredHistory.slice(0, 30).map((rate, idx) => (
             <div key={`${rate.date}-${rate.from_currency}-${rate.to_currency}-${idx}`}
               className="flex items-center justify-between py-2.5 text-sm">
               <span className="text-text-muted">{rate.date}</span>

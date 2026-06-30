@@ -18,6 +18,9 @@ export default function AccountsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [realBalances, setRealBalances] = useState<Record<string, string>>({});
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [filterStart, setFilterStart] = useState('');
+  const [filterEnd, setFilterEnd] = useState('');
 
   const [form, setForm] = useState({
     name: '', type: 'asset' as 'asset' | 'liability', currency: 'USD' as CurrencyCode, initialBalance: '',
@@ -69,12 +72,19 @@ export default function AccountsPage() {
     setShowForm(false);
   }
 
-  async function loadTransactions(account: any) {
+  async function loadTransactions(account: any, start?: string, end?: string) {
     setSelected(account);
     setTxHistory([]);
     try {
-      const txs = await db.accounts.transactions(account.id, { limit: 100 });
-      txs.sort((a: any, b: any) => a.date.localeCompare(b.date));
+      const txs = await db.accounts.transactions(account.id, { limit: 200, start, end });
+      setTxHistory(txs);
+    } catch (err) { console.error(err); }
+  }
+
+  async function applyFilter() {
+    if (!selected) return;
+    try {
+      const txs = await db.accounts.transactions(selected.id, { limit: 200, start: filterStart || undefined, end: filterEnd || undefined });
       setTxHistory(txs);
     } catch (err) { console.error(err); }
   }
@@ -86,11 +96,12 @@ export default function AccountsPage() {
     return parseFloat(tx.amount || '0');
   }
 
-  function computeRunningBalance(tx: any, index: number): number {
+  function computeRunningBalance(tx: any, index: number, txList?: any[]): number {
     const initial = parseFloat(selected?.initial_balance || '0');
+    const list = txList || txHistory;
     let balance = initial;
     for (let i = 0; i <= index; i++) {
-      const t = txHistory[i];
+      const t = list[i];
       if (!t) continue;
       const amt = getAmountForAccount(t);
       if (t.source_account_id === selected?.id) balance -= amt;
@@ -124,10 +135,14 @@ export default function AccountsPage() {
   if (selected) {
     const balance = parseFloat(selected.current_balance || '0');
     const currency = selected.currency || 'USD';
+    const displayTxs = [...txHistory].sort((a: any, b: any) => {
+      const cmp = a.date.localeCompare(b.date);
+      return sortOrder === 'asc' ? cmp : -cmp;
+    });
     return (
       <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
         <div className="flex items-center gap-3">
-          <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text p-2 rounded-xl hover:bg-surface-elevated transition-colors">
+          <button onClick={() => { setSelected(null); setFilterStart(''); setFilterEnd(''); }} className="text-text-muted hover:text-text p-2 rounded-xl hover:bg-surface-elevated transition-colors">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
           </button>
           <div className="flex-1">
@@ -147,6 +162,32 @@ export default function AccountsPage() {
             Editar cuenta
           </Button>
         </div>
+
+        {/* Date filter + sort */}
+        <Card padding="sm">
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Desde">
+              <Input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} className="py-1.5 text-sm" />
+            </Field>
+            <Field label="Hasta">
+              <Input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} className="py-1.5 text-sm" />
+            </Field>
+            <Button size="sm" variant="outline" onClick={applyFilter}>Filtrar</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setFilterStart(''); setFilterEnd(''); loadTransactions(selected); }}>
+              Limpiar
+            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-text-muted">Orden:</span>
+              <button onClick={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')}
+                className="flex items-center gap-1 text-xs text-primary hover:underline">
+                {sortOrder === 'asc' ? 'Más antiguo primero' : 'Más reciente primero'}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  {sortOrder === 'asc' ? <path d="M12 5v14M5 12l7-7 7 7" /> : <path d="M12 19V5M5 12l7 7 7-7" />}
+                </svg>
+              </button>
+            </div>
+          </div>
+        </Card>
 
         {showReconcile && (
           <Card>
@@ -189,11 +230,11 @@ export default function AccountsPage() {
                 {txHistory.length === 0 ? (
                   <tr><td colSpan={5} className="text-center py-10 text-text-muted text-sm">Sin movimientos</td></tr>
                 ) : (
-                  txHistory.map((tx: any, i: number) => {
+                  displayTxs.map((tx: any, i: number) => {
                     const amount = getAmountForAccount(tx);
                     const isDebit = tx.destination_account_id === selected.id;
                     const isCredit = tx.source_account_id === selected.id;
-                    const running = computeRunningBalance(tx, i);
+                    const running = computeRunningBalance(tx, i, displayTxs);
                     return (
                       <tr key={tx.id} className="hover:bg-surface-elevated/40 transition-colors">
                         <td className="px-5 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
@@ -213,10 +254,10 @@ export default function AccountsPage() {
             </table>
           </div>
           <div className="lg:hidden divide-y divide-surface-light/30">
-            {txHistory.length === 0 ? (
+            {displayTxs.length === 0 ? (
               <div className="py-10 text-center text-text-muted text-sm">Sin movimientos</div>
             ) : (
-              txHistory.map((tx: any, i: number) => {
+              displayTxs.map((tx: any, i: number) => {
                 const amount = getAmountForAccount(tx);
                 const isCredit = tx.source_account_id === selected.id;
                 const running = computeRunningBalance(tx, i);
