@@ -1,480 +1,442 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
+import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
-import { formatCurrency } from '@/lib/utils';
-import { Card, CardTitle } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { Input, Field, Select } from '@/components/ui/Input';
-import { Spinner } from '@/components/ui/Spinner';
-import type { CurrencyCode } from '@/types';
+import { formatCurrency, formatDate, generateId } from '@/lib/utils';
+import { Card, CardHeader, CardTitle, Button, Input, Select, Field, Badge } from '@/components/ui';
+import type { Liability, LiabilityMovement, CurrencyCode } from '@/types';
 
-const typeLabels: Record<string, string> = { loan: 'Préstamo', debt: 'Deuda', credit: 'Crédito' };
-const movTypeLabels: Record<string, string> = {
-  initial: 'Monto inicial', payment: 'Pago / Abono', increase: 'Incremento de deuda', interest: 'Interés',
-};
-const movTypeColors: Record<string, string> = {
-  initial: 'text-text-muted bg-surface-elevated border-surface-light',
-  payment: 'text-primary bg-primary/10 border-primary/20',
-  increase: 'text-danger bg-danger/10 border-danger/20',
-  interest: 'text-warning bg-warning/10 border-warning/20',
-};
+const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
+const LIAB_TYPES = [
+  { value: 'loan', label: 'Préstamo' },
+  { value: 'debt', label: 'Deuda' },
+  { value: 'credit', label: 'Crédito' },
+];
 
-export default function LoansPage() {
-  const [liabilities, setLiabilities] = useState<any[]>([]);
-  const [archivedList, setArchivedList] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<any | null>(null);
-  const [movements, setMovements] = useState<any[]>([]);
-  const [movLoading, setMovLoading] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+interface LiabForm {
+  name: string;
+  type: 'loan' | 'debt' | 'credit';
+  amount: string;
+  currency: CurrencyCode;
+  interest_rate: string;
+  start_date: string;
+  due_date: string;
+  registerInitial: boolean;
+}
+
+const emptyLiabForm = (): LiabForm => ({
+  name: '', type: 'loan', amount: '', currency: 'USD',
+  interest_rate: '0', start_date: '', due_date: '', registerInitial: true,
+});
+
+interface MovForm {
+  date: string;
+  type: 'payment' | 'increase' | 'interest';
+  amount: string;
+  currency: CurrencyCode;
+  notes: string;
+}
+
+const emptyMovForm = (currency: CurrencyCode = 'USD'): MovForm => ({
+  date: new Date().toISOString().split('T')[0],
+  type: 'payment', amount: '', currency, notes: '',
+});
+
+const movTypeLabel: Record<string, string> = { payment: 'Pago', increase: 'Aumento', interest: 'Interés', initial: 'Inicial' };
+const movTypeColor: Record<string, string> = { payment: 'text-secondary', increase: 'text-danger', interest: 'text-warning', initial: 'text-transfer' };
+
+export default function Loans() {
+  const { liabilities, addLiability, updateLiability, removeLiability, archiveLiabilityInStore } = useAppStore();
+  const [form, setForm] = useState<LiabForm>(emptyLiabForm());
+  const [editId, setEditId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  // Movement form
-  const [showMovForm, setShowMovForm] = useState(false);
-  const [movForm, setMovForm] = useState({
-    type: 'payment' as 'payment' | 'increase' | 'interest',
-    amount: '',
-    date: new Date().toISOString().split('T')[0],
-    notes: '',
-  });
+  // Detail view
+  const [selected, setSelected] = useState<Liability | null>(null);
+  const [movements, setMovements] = useState<LiabilityMovement[]>([]);
+  const [movLoading, setMovLoading] = useState(false);
+  const [movForm, setMovForm] = useState<MovForm>(emptyMovForm());
+  const [addingMov, setAddingMov] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archived, setArchived] = useState<Liability[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
 
-  const [form, setForm] = useState({
-    name: '', type: 'loan' as 'loan' | 'debt' | 'credit', amount: '', interestRate: '',
-    currency: 'USD' as CurrencyCode, startDate: new Date().toISOString().split('T')[0], dueDate: '',
-    createInitialMovement: false,
-  });
+  const active = liabilities.filter(l => !l.archived);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [active, archived] = await Promise.all([
-        db.liabilities.list(false),
-        db.liabilities.list(true).then(all => all.filter(l => l.archived)),
-      ]);
-      setLiabilities(active);
-      setArchivedList(archived);
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  async function openDetail(liab: any) {
-    setSelected(liab);
-    setMovLoading(true);
-    try {
-      const movs = await db.liabilities.movements(liab.id);
-      setMovements(movs);
-    } catch (err) { console.error(err); }
-    finally { setMovLoading(false); }
+  function openForm(l?: Liability) {
+    if (l) {
+      setEditId(l.id);
+      setForm({
+        name: l.name, type: l.type, amount: String(l.amount), currency: l.currency,
+        interest_rate: String(l.interest_rate), start_date: l.start_date || '', due_date: l.due_date || '', registerInitial: false,
+      });
+    } else {
+      setEditId(null);
+      setForm(emptyLiabForm());
+    }
+    setShowForm(true);
   }
 
-  function resetForm() {
-    setForm({ name: '', type: 'loan', amount: '', interestRate: '', currency: 'USD', startDate: new Date().toISOString().split('T')[0], dueDate: '', createInitialMovement: false });
-    setEditingId(null); setShowForm(false);
-  }
+  function closeForm() { setShowForm(false); setEditId(null); setForm(emptyLiabForm()); setError(''); }
 
-  function resetMovForm() {
-    setMovForm({ type: 'payment', amount: '', date: new Date().toISOString().split('T')[0], notes: '' });
-    setShowMovForm(false);
-  }
+  const f = (k: keyof LiabForm, v: string | boolean) => setForm(prev => ({ ...prev, [k]: v }));
+  const mf = (k: keyof MovForm, v: string) => setMovForm(prev => ({ ...prev, [k]: v }));
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault(); setError('');
-    if (!form.name.trim()) { setError('Nombre requerido'); return; }
-    if (!form.amount || parseFloat(form.amount) <= 0) { setError('Monto requerido'); return; }
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+    const amt = parseFloat(form.amount) || 0;
+    const payload = {
+      name: form.name, type: form.type, amount: amt, current_balance: amt,
+      currency: form.currency as CurrencyCode, interest_rate: parseFloat(form.interest_rate) || 0,
+      start_date: form.start_date || null, due_date: form.due_date || null, archived: false, paid_date: null,
+    };
     try {
-      if (editingId) {
-        const updated = await db.liabilities.update(editingId, {
-          name: form.name.trim(), type: form.type, amount: parseFloat(form.amount),
-          interest_rate: parseFloat(form.interestRate) || 0, currency: form.currency,
-          start_date: form.startDate || null, due_date: form.dueDate || null,
-        });
-        setLiabilities(prev => prev.map(l => l.id === editingId ? updated : l));
-        if (selected?.id === editingId) setSelected(updated);
+      if (editId) {
+        const prev = liabilities.find(l => l.id === editId)!;
+        updateLiability(editId, { ...prev, ...payload, current_balance: prev.current_balance });
+        closeForm();
+        const real = await db.liabilities.update(editId, payload);
+        updateLiability(editId, real);
       } else {
-        const created = await db.liabilities.create({
-          name: form.name.trim(), type: form.type, amount: parseFloat(form.amount),
-          current_balance: parseFloat(form.amount), interest_rate: parseFloat(form.interestRate) || 0,
-          currency: form.currency, start_date: form.startDate || null, due_date: form.dueDate || null,
-          archived: false,
-        });
-        setLiabilities(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
-
-        // Optionally create initial movement
-        if (form.createInitialMovement) {
+        const tempId = generateId();
+        const optimistic: Liability = { id: tempId, user_id: '', created_at: new Date().toISOString(), ...payload };
+        addLiability(optimistic);
+        closeForm();
+        const real = await db.liabilities.create(payload);
+        updateLiability(tempId, real);
+        if (form.registerInitial && amt > 0) {
           await db.liabilities.addMovement({
-            liability_id: created.id,
-            date: form.startDate || new Date().toISOString().split('T')[0],
-            type: 'initial',
-            amount: parseFloat(form.amount),
-            currency: form.currency,
-            notes: 'Monto inicial del préstamo',
-            transaction_id: null,
+            liability_id: real.id, date: form.start_date || new Date().toISOString().split('T')[0],
+            type: 'initial', amount: amt, currency: form.currency, notes: 'Monto inicial', transaction_id: null,
           });
         }
       }
-      resetForm();
-    } catch (err: any) { setError(err.message || 'Error'); }
+    } catch {
+      setError('Error al guardar');
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
   }
 
-  function startEdit(liab: any) {
-    setForm({
-      name: liab.name, type: liab.type, amount: liab.amount?.toString() || '',
-      interestRate: liab.interest_rate?.toString() || '', currency: liab.currency || 'USD',
-      startDate: liab.start_date || '', dueDate: liab.due_date || '', createInitialMovement: false,
-    });
-    setEditingId(liab.id); setShowForm(true);
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este préstamo y todos sus movimientos?')) return;
-    try {
-      await db.liabilities.delete(id);
-      setLiabilities(prev => prev.filter(l => l.id !== id));
-      if (selected?.id === id) setSelected(null);
-    } catch (err) { console.error(err); }
-  }
-
-  async function handleArchive(id: string) {
-    if (!confirm('¿Marcar como pagado y archivar este préstamo?')) return;
-    try {
-      await db.liabilities.archive(id);
-      const liab = liabilities.find(l => l.id === id);
-      setLiabilities(prev => prev.filter(l => l.id !== id));
-      if (liab) setArchivedList(prev => [{ ...liab, archived: true, current_balance: 0 }, ...prev]);
-      if (selected?.id === id) setSelected(null);
-    } catch (err) { console.error(err); }
+  async function openDetail(l: Liability) {
+    setSelected(l);
+    setMovForm(emptyMovForm(l.currency));
+    setMovLoading(true);
+    const movs = await db.liabilities.movements(l.id);
+    setMovements(movs);
+    setMovLoading(false);
   }
 
   async function handleAddMovement(e: React.FormEvent) {
     e.preventDefault();
-    if (!selected || !movForm.amount || parseFloat(movForm.amount) <= 0) return;
+    if (!selected) return;
+    setAddingMov(true);
+    const amt = parseFloat(movForm.amount);
+    const movement = {
+      liability_id: selected.id, date: movForm.date, type: movForm.type,
+      amount: amt, currency: movForm.currency, notes: movForm.notes, transaction_id: null,
+    };
+    const newBalance = movForm.type === 'payment'
+      ? Math.max(0, parseFloat(String(selected.current_balance)) - amt)
+      : parseFloat(String(selected.current_balance)) + amt;
+    const updatedLiab = { ...selected, current_balance: newBalance };
+    setSelected(updatedLiab);
+    updateLiability(selected.id, updatedLiab);
+    setMovForm(emptyMovForm(selected.currency));
     try {
-      const mov = await db.liabilities.addMovement({
-        liability_id: selected.id,
-        date: movForm.date,
-        type: movForm.type,
-        amount: parseFloat(movForm.amount),
-        currency: selected.currency,
-        notes: movForm.notes,
-        transaction_id: null,
-      });
-      setMovements(prev => [...prev, mov].sort((a, b) => a.date.localeCompare(b.date)));
-
-      // Update the selected liability's balance
-      const currentBalance = parseFloat(selected.current_balance || '0');
-      const newBalance = movForm.type === 'payment'
-        ? Math.max(0, currentBalance - parseFloat(movForm.amount))
-        : currentBalance + parseFloat(movForm.amount);
-      const updatedLiab = { ...selected, current_balance: newBalance };
-      setSelected(updatedLiab);
-      setLiabilities(prev => prev.map(l => l.id === selected.id ? updatedLiab : l));
-
-      resetMovForm();
-    } catch (err) { console.error(err); }
+      const real = await db.liabilities.addMovement(movement);
+      setMovements(prev => [...prev, real].sort((a, b) => a.date.localeCompare(b.date)));
+    } catch {
+      setSelected(selected);
+      updateLiability(selected.id, selected);
+      setError('Error al agregar movimiento');
+    } finally {
+      setAddingMov(false);
+    }
   }
 
-  async function handleDeleteMovement(mov: any) {
-    if (!confirm('¿Eliminar este movimiento?')) return;
+  async function handleDeleteMovement(mov: LiabilityMovement) {
+    if (!selected) return;
+    const newBalance = mov.type === 'payment'
+      ? parseFloat(String(selected.current_balance)) + mov.amount
+      : Math.max(0, parseFloat(String(selected.current_balance)) - mov.amount);
+    const updatedLiab = { ...selected, current_balance: newBalance };
+    setSelected(updatedLiab);
+    updateLiability(selected.id, updatedLiab);
+    setMovements(prev => prev.filter(m => m.id !== mov.id));
     try {
       await db.liabilities.deleteMovement(mov.id, selected.id, mov.amount, mov.type);
-      setMovements(prev => prev.filter(m => m.id !== mov.id));
-
-      // Update balance
-      const currentBalance = parseFloat(selected.current_balance || '0');
-      const newBalance = mov.type === 'payment'
-        ? currentBalance + mov.amount
-        : Math.max(0, currentBalance - mov.amount);
-      const updatedLiab = { ...selected, current_balance: newBalance };
-      setSelected(updatedLiab);
-      setLiabilities(prev => prev.map(l => l.id === selected.id ? updatedLiab : l));
-    } catch (err) { console.error(err); }
+    } catch {
+      setSelected(selected);
+      updateLiability(selected.id, selected);
+      setMovements(prev => [...prev, mov].sort((a, b) => a.date.localeCompare(b.date)));
+      setError('Error al eliminar movimiento');
+    }
   }
 
-  const totalDebt = liabilities.reduce((sum: number, l: any) => sum + parseFloat(l.current_balance || l.amount || '0'), 0);
+  async function handleArchive(l: Liability) {
+    archiveLiabilityInStore(l.id);
+    if (selected?.id === l.id) setSelected(null);
+    try {
+      await db.liabilities.archive(l.id);
+    } catch {
+      addLiability(l);
+      setError('Error al archivar');
+    }
+  }
 
-  // ─── Detail / history view ────────────────────────────────
+  async function loadArchived() {
+    setArchivedLoading(true);
+    const data = await db.liabilities.list(true);
+    setArchived(data.filter(l => l.archived));
+    setArchivedLoading(false);
+    setShowArchived(true);
+  }
+
+  // Detail view
   if (selected) {
-    const balance = parseFloat(selected.current_balance || '0');
-    const originalAmount = parseFloat(selected.amount || '0');
-    const paid = originalAmount > 0 ? Math.min(100, ((originalAmount - balance) / originalAmount) * 100) : 0;
-    const currency = selected.currency || 'USD';
+    const current = parseFloat(String(selected.current_balance));
+    const original = parseFloat(String(selected.amount));
+    const paid = original - current;
+    const pct = original > 0 ? Math.min(100, (paid / original) * 100) : 0;
 
     return (
-      <div className="p-4 lg:p-6 space-y-4 max-w-2xl">
+      <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-4">
         <div className="flex items-center gap-3">
-          <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text p-2 rounded-xl hover:bg-surface-elevated transition-colors">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+          <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text p-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
           </button>
           <div className="flex-1">
-            <h1 className="text-lg font-bold">{selected.name}</h1>
-            <p className="text-xs text-text-muted">{typeLabels[selected.type] || selected.type} · {currency}</p>
+            <h1 className="text-lg font-bold text-text">{selected.name}</h1>
+            <p className="text-xs text-text-muted capitalize">{movTypeLabel[selected.type] ?? selected.type} · {selected.currency}</p>
           </div>
-          <div className="text-right">
-            <p className="text-2xl font-bold text-danger">{formatCurrency(balance, currency)}</p>
-            <p className="text-xs text-text-muted">pendiente</p>
-          </div>
+          <Button size="sm" variant="warning" onClick={() => handleArchive(selected)}>Marcar pagado</Button>
         </div>
+
+        {error && <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
 
         {/* Progress */}
-        {originalAmount > 0 && (
-          <Card>
-            <div className="flex justify-between text-sm mb-2">
-              <span className="text-text-muted">Progreso de pago</span>
-              <span className="font-medium text-primary">{paid.toFixed(1)}%</span>
+        <Card padding="sm">
+          <div className="flex justify-between text-sm mb-2">
+            <div>
+              <p className="text-text-muted text-xs">Pagado</p>
+              <p className="font-semibold text-secondary">{formatCurrency(paid, selected.currency)}</p>
             </div>
-            <div className="w-full bg-surface-light rounded-full h-2 mb-2">
-              <div className="bg-primary rounded-full h-2 transition-all" style={{ width: `${paid}%` }} />
+            <div className="text-right">
+              <p className="text-text-muted text-xs">Restante</p>
+              <p className="font-semibold text-danger">{formatCurrency(current, selected.currency)}</p>
             </div>
-            <div className="flex justify-between text-xs text-text-muted">
-              <span>Pagado: {formatCurrency(originalAmount - balance, currency)}</span>
-              <span>Total: {formatCurrency(originalAmount, currency)}</span>
-            </div>
-            {selected.interest_rate > 0 && (
-              <p className="text-xs text-text-muted mt-1">{selected.interest_rate}% interés</p>
-            )}
-            {selected.due_date && (
-              <p className="text-xs text-text-muted mt-0.5">Vencimiento: {selected.due_date}</p>
-            )}
-          </Card>
-        )}
-
-        {/* Action buttons */}
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => setShowMovForm(!showMovForm)}>
-            {showMovForm ? 'Cancelar' : '+ Registrar movimiento'}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => { startEdit(selected); setSelected(null); }}>
-            Editar
-          </Button>
-          <Button size="sm" variant="warning" onClick={() => handleArchive(selected.id)}>
-            Marcar como pagado
-          </Button>
-          <Button size="sm" variant="danger" onClick={() => handleDelete(selected.id)}>
-            Eliminar
-          </Button>
-        </div>
-
-        {/* Movement form */}
-        {showMovForm && (
-          <Card>
-            <form onSubmit={handleAddMovement} className="space-y-3">
-              <p className="text-sm font-semibold">Nuevo movimiento</p>
-              <div className="grid grid-cols-3 gap-1">
-                {(['payment', 'increase', 'interest'] as const).map(t => (
-                  <button key={t} type="button"
-                    onClick={() => setMovForm(f => ({ ...f, type: t }))}
-                    className={`py-2 rounded-lg text-xs font-medium transition-colors ${
-                      movForm.type === t
-                        ? t === 'payment' ? 'bg-primary text-white' : t === 'increase' ? 'bg-danger text-white' : 'bg-warning text-black'
-                        : 'bg-surface-light text-text-muted'
-                    }`}>
-                    {movTypeLabels[t]}
-                  </button>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Monto">
-                  <Input type="number" step="0.01" value={movForm.amount} onChange={e => setMovForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" required autoFocus />
-                </Field>
-                <Field label="Fecha">
-                  <Input type="date" value={movForm.date} onChange={e => setMovForm(f => ({ ...f, date: e.target.value }))} />
-                </Field>
-              </div>
-              <Field label="Notas (opcional)">
-                <Input type="text" value={movForm.notes} onChange={e => setMovForm(f => ({ ...f, notes: e.target.value }))} placeholder="Referencia, banco, etc." />
-              </Field>
-              <div className="flex gap-2">
-                <Button type="submit" className="flex-1">Guardar</Button>
-                <Button type="button" variant="ghost" onClick={resetMovForm}>Cancelar</Button>
-              </div>
-            </form>
-          </Card>
-        )}
-
-        {/* Movements history */}
-        <Card padding="none">
-          <div className="px-5 py-4 border-b border-surface-light/60">
-            <CardTitle>Historial de movimientos</CardTitle>
           </div>
+          <div className="w-full h-2 bg-surface-light rounded-full overflow-hidden">
+            <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="text-xs text-text-muted mt-1.5 text-center">{Math.round(pct)}% pagado · Original: {formatCurrency(original, selected.currency)}</p>
+        </Card>
+
+        {/* Add movement form */}
+        <Card>
+          <CardHeader><CardTitle>Agregar movimiento</CardTitle></CardHeader>
+          <form onSubmit={handleAddMovement} className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <Field label="Fecha">
+              <Input type="date" value={movForm.date} onChange={e => mf('date', e.target.value)} required />
+            </Field>
+            <Field label="Tipo">
+              <Select value={movForm.type} onChange={e => mf('type', e.target.value)}>
+                <option value="payment">Pago</option>
+                <option value="increase">Aumento</option>
+                <option value="interest">Interés</option>
+              </Select>
+            </Field>
+            <Field label="Moneda">
+              <Select value={movForm.currency} onChange={e => mf('currency', e.target.value)}>
+                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </Field>
+            <Field label="Monto">
+              <Input type="number" step="any" min="0" value={movForm.amount} onChange={e => mf('amount', e.target.value)} placeholder="0.00" required />
+            </Field>
+            <Field label="Notas" className="col-span-2 sm:col-span-1">
+              <Input value={movForm.notes} onChange={e => mf('notes', e.target.value)} placeholder="Opcional" />
+            </Field>
+            <div className="col-span-2 sm:col-span-3 flex justify-end">
+              <Button type="submit" loading={addingMov}>Registrar</Button>
+            </div>
+          </form>
+        </Card>
+
+        {/* Movement history */}
+        <Card padding="none">
+          <CardHeader className="px-5 pt-5"><CardTitle>Historial</CardTitle></CardHeader>
           {movLoading ? (
-            <div className="py-8 flex justify-center"><Spinner /></div>
+            <div className="flex justify-center py-6"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
           ) : movements.length === 0 ? (
-            <div className="py-8 text-center text-text-muted text-sm">
-              Sin movimientos registrados. Usa el botón de arriba para agregar.
-            </div>
+            <p className="text-sm text-text-muted text-center py-6">Sin movimientos aún</p>
           ) : (
-            <div className="divide-y divide-surface-light/30">
-              {[...movements].sort((a, b) => b.date.localeCompare(a.date)).map(mov => (
-                <div key={mov.id} className="flex items-start justify-between px-5 py-3.5">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className={`text-xs px-2 py-0.5 rounded-full border ${movTypeColors[mov.type]}`}>
-                        {movTypeLabels[mov.type]}
-                      </span>
+            <ul className="divide-y divide-surface-light/40">
+              {movements.map(mov => (
+                <li key={mov.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-medium ${movTypeColor[mov.type]}`}>{movTypeLabel[mov.type]}</span>
+                      {mov.notes && <span className="text-xs text-text-muted">— {mov.notes}</span>}
                     </div>
-                    <p className="text-xs text-text-muted">{mov.date}{mov.notes ? ` · ${mov.notes}` : ''}</p>
+                    <p className="text-xs text-text-muted">{formatDate(mov.date)}</p>
                   </div>
-                  <div className="flex items-center gap-3 ml-3">
-                    <span className={`font-semibold ${mov.type === 'payment' ? 'text-primary' : 'text-danger'}`}>
-                      {mov.type === 'payment' ? '−' : '+'}{formatCurrency(mov.amount, mov.currency)}
-                    </span>
-                    <button onClick={() => handleDeleteMovement(mov)} className="text-text-muted hover:text-danger transition-colors">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                </div>
+                  <span className={`text-sm font-semibold ${movTypeColor[mov.type]}`}>
+                    {mov.type === 'payment' ? '−' : '+'}{formatCurrency(mov.amount, mov.currency)}
+                  </span>
+                  {mov.type !== 'initial' && (
+                    <Button size="icon" variant="danger" onClick={() => handleDeleteMovement(mov)}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
+                    </Button>
+                  )}
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </Card>
       </div>
     );
   }
 
-  // ─── Loan list ────────────────────────────────────────────
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-2xl">
+    <div className="p-4 lg:p-6 max-w-3xl mx-auto space-y-5">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold">Préstamos / Deudas</h1>
-          <p className="text-sm text-text-muted">Gestiona tus pasivos</p>
-        </div>
-        <Button size="icon" onClick={() => { resetForm(); setShowForm(!showForm); }} className="rounded-full w-10 h-10">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            {showForm ? <path d="M6 18L18 6M6 6l12 12" /> : <path d="M12 5v14M5 12h14" />}
-          </svg>
+        <h1 className="text-xl font-bold text-text">Préstamos</h1>
+        <Button onClick={() => openForm()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
+          Nuevo
         </Button>
       </div>
 
-      {error && <div className="bg-danger/10 border border-danger/20 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
-
-      {showForm && (
-        <Card>
-          <form onSubmit={handleCreate} className="space-y-3">
-            <Field label="Nombre">
-              <Input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej. Préstamo Juan" required />
-            </Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Tipo">
-                <Select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}>
-                  <option value="loan">Préstamo</option><option value="debt">Deuda</option><option value="credit">Crédito</option>
-                </Select>
-              </Field>
-              <Field label="Moneda">
-                <Select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value as CurrencyCode }))}>
-                  <option value="USD">USD</option><option value="VES">VES</option><option value="EUR">EUR</option>
-                </Select>
-              </Field>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Monto total">
-                <Input type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" required />
-              </Field>
-              <Field label="Interés %">
-                <Input type="number" step="0.01" value={form.interestRate} onChange={e => setForm(f => ({ ...f, interestRate: e.target.value }))} placeholder="0" />
-              </Field>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Fecha inicio">
-                <Input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} />
-              </Field>
-              <Field label="Vencimiento">
-                <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} />
-              </Field>
-            </div>
-            {!editingId && (
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={form.createInitialMovement}
-                  onChange={e => setForm(f => ({ ...f, createInitialMovement: e.target.checked }))}
-                  className="w-4 h-4 rounded accent-primary"
-                />
-                <span className="text-sm text-text-muted">Registrar monto inicial en el historial</span>
-              </label>
-            )}
-            <div className="flex gap-2">
-              <Button type="submit" className="flex-1">{editingId ? 'Guardar' : 'Crear'}</Button>
-              <Button type="button" variant="ghost" onClick={resetForm}>Cancelar</Button>
-            </div>
-          </form>
-        </Card>
-      )}
-
-      {/* Total */}
-      <Card>
-        <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Deuda total activa</p>
-        <p className="text-3xl font-bold text-danger">{formatCurrency(Math.abs(totalDebt))}</p>
-      </Card>
+      {error && <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
 
       {/* Active loans */}
-      <div className="space-y-2">
-        {loading ? <Spinner fullPage /> : liabilities.length === 0 ? (
-          <div className="text-center py-10 text-text-muted"><p className="text-sm">No hay préstamos registrados</p></div>
-        ) : liabilities.map((liab: any) => {
-          const balance = parseFloat(liab.current_balance || liab.amount || '0');
-          const original = parseFloat(liab.amount || '0');
-          const paid = original > 0 ? Math.min(100, ((original - balance) / original) * 100) : 0;
-          const currency = liab.currency || 'USD';
+      <div className="space-y-3">
+        {active.length === 0 && (
+          <Card className="text-center py-12">
+            <p className="text-text-muted mb-3">Sin préstamos activos</p>
+            <Button onClick={() => openForm()}>Agregar préstamo</Button>
+          </Card>
+        )}
+        {active.map(l => {
+          const current = parseFloat(String(l.current_balance));
+          const original = parseFloat(String(l.amount));
+          const paid = original - current;
+          const pct = original > 0 ? Math.min(100, (paid / original) * 100) : 0;
           return (
-            <Card key={liab.id} padding="sm" className="cursor-pointer hover:border-surface-elevated transition-colors" >
-              <div className="flex items-start justify-between" onClick={() => openDetail(liab)}>
-                <div className="flex-1">
-                  <p className="font-medium">{liab.name}</p>
-                  <p className="text-xs text-text-muted mt-0.5">{typeLabels[liab.type] || liab.type} · {currency}</p>
-                  {liab.interest_rate > 0 && (
-                    <p className="text-xs text-text-muted mt-1">{liab.interest_rate}% · Vence: {liab.due_date || 'Sin fecha'}</p>
-                  )}
+            <Card key={l.id} padding="sm" className="cursor-pointer hover:border-surface-light transition-colors" onClick={() => openDetail(l)}>
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex-1 min-w-0 mr-2">
+                  <p className="font-semibold text-text truncate">{l.name}</p>
+                  <p className="text-xs text-text-muted capitalize">{LIAB_TYPES.find(t => t.value === l.type)?.label} · {l.currency}</p>
                 </div>
-                <div className="ml-3 text-right">
-                  <p className="font-bold text-lg text-danger">{formatCurrency(balance, currency)}</p>
-                  <p className="text-xs text-text-muted">{paid.toFixed(0)}% pagado</p>
-                </div>
-              </div>
-              {original > 0 && (
-                <div className="mt-3">
-                  <div className="w-full bg-surface-light rounded-full h-1.5">
-                    <div className="bg-primary rounded-full h-1.5 transition-all" style={{ width: `${paid}%` }} />
+                <div className="text-right shrink-0" onClick={e => e.stopPropagation()}>
+                  <p className="font-bold text-danger">{formatCurrency(current, l.currency)}</p>
+                  <div className="flex gap-1 justify-end mt-1">
+                    <Button size="sm" variant="ghost" onClick={() => openForm(l)}>Editar</Button>
+                    <Button size="sm" variant="danger" onClick={async () => {
+                      removeLiability(l.id);
+                      try { await db.liabilities.delete(l.id); } catch { addLiability(l); }
+                    }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
+                    </Button>
                   </div>
                 </div>
-              )}
+              </div>
+              <div className="w-full h-1.5 bg-surface-light rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full" style={{ width: `${pct}%` }} />
+              </div>
+              <p className="text-xs text-text-muted mt-1">{Math.round(pct)}% pagado · {formatCurrency(paid, l.currency)} de {formatCurrency(original, l.currency)}</p>
             </Card>
           );
         })}
       </div>
 
-      {/* Archived loans */}
-      {archivedList.length > 0 && (
-        <div>
-          <button onClick={() => setShowArchived(!showArchived)}
-            className="flex items-center gap-2 text-sm text-text-muted hover:text-text transition-colors mb-2">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              className={`transition-transform ${showArchived ? 'rotate-90' : ''}`}>
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-            {showArchived ? 'Ocultar' : 'Ver'} archivados ({archivedList.length})
-          </button>
-          {showArchived && (
-            <div className="space-y-2">
-              {archivedList.map((liab: any) => (
-                <Card key={liab.id} padding="sm">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-text-muted line-through">{liab.name}</p>
-                      <p className="text-xs text-text-muted">{typeLabels[liab.type]} · Pagado {liab.paid_date || ''}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">Pagado</span>
-                      <span className="text-sm font-medium text-text-muted">{formatCurrency(parseFloat(liab.amount || '0'), liab.currency)}</span>
-                    </div>
+      {/* Archived section */}
+      <div>
+        <button onClick={showArchived ? () => setShowArchived(false) : loadArchived}
+          className="flex items-center gap-2 text-sm text-text-muted hover:text-text transition-colors">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d={showArchived ? 'M19 9l-7 7-7-7' : 'M9 18l6-6-6-6'} />
+          </svg>
+          {showArchived ? 'Ocultar' : 'Ver'} préstamos pagados {archived.length > 0 ? `(${archived.length})` : ''}
+        </button>
+        {showArchived && (
+          <div className="mt-3 space-y-2">
+            {archivedLoading ? (
+              <div className="flex justify-center py-4"><span className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+            ) : archived.map(l => (
+              <Card key={l.id} padding="sm" className="opacity-70">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-text">{l.name}</p>
+                    <p className="text-xs text-text-muted">{l.paid_date ? `Pagado ${formatDate(l.paid_date)}` : 'Archivado'}</p>
                   </div>
-                </Card>
-              ))}
-            </div>
-          )}
+                  <Badge variant="primary">Pagado</Badge>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center">
+          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeForm} />
+          <div className="relative w-full lg:max-w-md bg-surface rounded-t-2xl lg:rounded-2xl border border-surface-light/60 p-5 z-10">
+            <div className="w-10 h-1 bg-surface-light rounded-full mx-auto mb-5 lg:hidden" />
+            <h2 className="text-base font-semibold text-text mb-4">{editId ? 'Editar' : 'Nuevo préstamo'}</h2>
+            {error && <div className="bg-danger/10 border border-danger/30 rounded-xl px-3 py-2 text-sm text-danger mb-3">{error}</div>}
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <Field label="Nombre">
+                <Input value={form.name} onChange={e => f('name', e.target.value)} placeholder="Ej: Banco Nacional" required />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Tipo">
+                  <Select value={form.type} onChange={e => f('type', e.target.value)}>
+                    {LIAB_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Moneda">
+                  <Select value={form.currency} onChange={e => f('currency', e.target.value)}>
+                    {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </Select>
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Monto original">
+                  <Input type="number" step="any" min="0" value={form.amount} onChange={e => f('amount', e.target.value)} placeholder="0.00" required />
+                </Field>
+                <Field label="Tasa de interés %">
+                  <Input type="number" step="any" min="0" value={form.interest_rate} onChange={e => f('interest_rate', e.target.value)} />
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Fecha inicio">
+                  <Input type="date" value={form.start_date} onChange={e => f('start_date', e.target.value)} />
+                </Field>
+                <Field label="Fecha vence">
+                  <Input type="date" value={form.due_date} onChange={e => f('due_date', e.target.value)} />
+                </Field>
+              </div>
+              {!editId && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.registerInitial} onChange={e => f('registerInitial', e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm text-text">Registrar monto inicial en historial</span>
+                </label>
+              )}
+              <div className="flex gap-3 pt-2">
+                <Button variant="outline" className="flex-1" onClick={closeForm} type="button">Cancelar</Button>
+                <Button type="submit" loading={saving} className="flex-1">Guardar</Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

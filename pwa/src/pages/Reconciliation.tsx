@@ -1,342 +1,201 @@
-import { useState, useEffect, useCallback } from 'react';
-import { db } from '@/lib/db';
+import { useAppStore } from '@/lib/store';
 import { formatCurrency } from '@/lib/utils';
-import { Card, CardTitle } from '@/components/ui/Card';
-import { Spinner } from '@/components/ui/Spinner';
-import type { AccountAcquisition, ExchangeRate } from '@/types';
+import { Card, CardHeader, CardTitle, Button } from '@/components/ui';
 
-interface AccountBreakdown {
-  id: string;
-  name: string;
-  currency: string;
-  balance: number;
-  usdValue: number;
-  usdCost: number | null;
-  rate: number | null;
-  excluded: boolean;
-}
+export default function Reconciliation() {
+  const { accounts, jars, exchangeRates, refresh } = useAppStore();
 
-interface JarTotal {
-  id: string;
-  name: string;
-  amount: number;
-  currency: string;
-  usdValue: number;
-  target: number;
-}
-
-export default function ReconciliationPage() {
-  const [loading, setLoading] = useState(true);
-  const [accounts, setAccounts] = useState<AccountBreakdown[]>([]);
-  const [jars, setJars] = useState<JarTotal[]>([]);
-  const [todayRates, setTodayRates] = useState<ExchangeRate[]>([]);
-  const [acquisitions, setAcquisitions] = useState<AccountAcquisition[]>([]);
-  const [editingAcq, setEditingAcq] = useState<string | null>(null);
-  const [acqForm, setAcqForm] = useState({ rate: '' });
-  const [error, setError] = useState('');
-
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const [accList, jarList, rates, acqs] = await Promise.all([
-        db.accounts.list({ type: 'asset' }),
-        db.piggyBanks.list(),
-        db.exchangeRates.getByDate(today),
-        db.accountAcquisition.getAll(),
-      ]);
-
-      setTodayRates(rates);
-      setAcquisitions(acqs);
-
-      let vesRate = rates.find(r => r.from_currency === 'USDT' && r.to_currency === 'VES')?.rate
-        || rates.find(r => r.from_currency === 'USD' && r.to_currency === 'VES')?.rate
-        || null;
-
-      // Fallback: most recent VES rate from any date
-      if (!vesRate) {
-        const allRates = await db.exchangeRates.getAll();
-        const fallback = allRates
-          .filter(r => (r.from_currency === 'USDT' || r.from_currency === 'USD') && r.to_currency === 'VES')
-          .sort((a, b) => b.date.localeCompare(a.date));
-        vesRate = fallback[0]?.rate || null;
-      }
-
-      const parsed: AccountBreakdown[] = accList.map((acc: any) => {
-        const currency = acc.currency || 'USD';
-        const balance = parseFloat(acc.current_balance || '0');
-        const excluded = currency === 'EUR' || currency === 'BTC';
-        const acq = acqs.find(a => a.account_id === acc.id);
-        let usdValue: number;
-        let usdCost: number | null = null;
-
-        if (currency === 'USD' || currency === 'USDT') {
-          usdValue = balance;
-          usdCost = balance;
-        } else if (currency === 'VES' && vesRate) {
-          usdValue = balance / vesRate;
-          usdCost = acq?.average_rate ? balance / acq.average_rate : null;
-        } else {
-          usdValue = 0;
-          usdCost = null;
-        }
-
-        return {
-          id: acc.id,
-          name: acc.name,
-          currency,
-          balance,
-          usdValue,
-          usdCost,
-          rate: currency === 'VES' ? vesRate : null,
-          excluded,
-        };
-      });
-
-      setAccounts(parsed);
-
-      const jarParsed: JarTotal[] = jarList.map((jar: any) => {
-        const amount = parseFloat(jar.current_amount || '0');
-        const target = parseFloat(jar.target_amount || '0');
-        const currency = jar.currency || 'USD';
-        return {
-          id: jar.id,
-          name: jar.name,
-          amount,
-          currency,
-          usdValue: currency === 'VES' && vesRate ? amount / vesRate : amount,
-          target,
-        };
-      });
-
-      setJars(jarParsed);
-    } catch (err) {
-      console.error(err);
-      setError('Error al cargar datos para conciliación');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  async function saveAcquisition(accountId: string) {
-    const rate = parseFloat(acqForm.rate);
-    if (isNaN(rate) || rate <= 0) return;
-
-    await db.accountAcquisition.set({
-      account_id: accountId,
-      average_rate: rate,
-      notes: 'Configurado manualmente',
-    });
-
-    setEditingAcq(null);
-    setAcqForm({ rate: '' });
-    fetchData();
+  // Latest rate for a given pair
+  function getRate(from: string, to: string): number | null {
+    const rate = exchangeRates.find(r => r.from_currency === from && r.to_currency === to);
+    return rate ? parseFloat(String(rate.rate)) : null;
   }
 
-  const usdAccounts = accounts.filter(a => !a.excluded);
-  const totalUsdDirect = usdAccounts
-    .filter(a => a.currency === 'USD' || a.currency === 'USDT')
-    .reduce((s, a) => s + a.usdValue, 0);
-  const vesAccounts = usdAccounts.filter(a => a.currency === 'VES');
-  const totalVesAtToday = vesAccounts.reduce((s, a) => s + a.usdValue, 0);
-  const totalVesAtCost = vesAccounts.reduce((s, a) => s + (a.usdCost ?? a.usdValue), 0);
-  const totalUsdAccounts = totalUsdDirect + totalVesAtToday;
-  const totalUsdCost = totalUsdDirect + totalVesAtCost;
-  const rateAdjustment = totalUsdAccounts - totalUsdCost;
-  const totalJarsUsd = jars.reduce((s, j) => s + j.usdValue, 0);
-  const gap = totalUsdAccounts - totalJarsUsd;
-  const gapAfterRate = totalUsdCost - totalJarsUsd;
+  function toUSD(amount: number, currency: string): number | null {
+    if (currency === 'USD' || currency === 'USDT') return amount;
+    const rate = getRate('USD', currency);
+    if (!rate) return null;
+    return amount / rate;
+  }
 
-  if (loading) return <Spinner fullPage />;
+  const totalUSDEquivalent = accounts
+    .filter(a => a.type === 'asset' && a.include_in_net_worth)
+    .reduce((sum, a) => {
+      const usd = toUSD(parseFloat(String(a.current_balance)), a.currency);
+      return sum + (usd ?? 0);
+    }, 0);
+
+  const totalLiabUSD = accounts
+    .filter(a => a.type === 'liability')
+    .reduce((sum, a) => {
+      const usd = toUSD(parseFloat(String(a.current_balance)), a.currency);
+      return sum + (usd ?? 0);
+    }, 0);
+
+  const totalJarsUSD = jars.reduce((sum, j) => {
+    const usd = toUSD(parseFloat(String(j.current_amount)), j.currency);
+    return sum + (usd ?? 0);
+  }, 0);
+
+  // Accounts missing a rate (can't convert to USD)
+  const missingRates = [
+    ...accounts.filter(a => {
+      if (a.currency === 'USD' || a.currency === 'USDT') return false;
+      return getRate('USD', a.currency) === null;
+    }).map(a => ({ type: 'account' as const, name: a.name, currency: a.currency })),
+    ...jars.filter(j => {
+      if (j.currency === 'USD' || j.currency === 'USDT') return false;
+      return getRate('USD', j.currency) === null;
+    }).map(j => ({ type: 'jar' as const, name: j.name, currency: j.currency })),
+  ];
+
+  // All currencies with their latest rate
+  const allCurrencies = [...new Set(exchangeRates.map(r => r.to_currency))];
 
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-lg lg:max-w-4xl pb-24">
-      <h1 className="text-xl font-bold">Conciliación</h1>
+    <div className="p-4 lg:p-6 max-w-4xl mx-auto space-y-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold text-text">Conciliación</h1>
+        <Button variant="outline" size="sm" onClick={() => refresh()}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+            <path d="M21 3v5h-5" />
+            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+            <path d="M8 16H3v5" />
+          </svg>
+          Actualizar
+        </Button>
+      </div>
 
-      {error && (
-        <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>
+      {/* Summary */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Card padding="sm">
+          <p className="text-xs text-text-muted mb-1">Activos (eq. USD)</p>
+          <p className="text-xl font-bold text-text">{formatCurrency(totalUSDEquivalent)}</p>
+        </Card>
+        <Card padding="sm">
+          <p className="text-xs text-text-muted mb-1">Pasivos (eq. USD)</p>
+          <p className="text-xl font-bold text-danger">{formatCurrency(totalLiabUSD)}</p>
+        </Card>
+        <Card padding="sm">
+          <p className="text-xs text-text-muted mb-1">En jarras (eq. USD)</p>
+          <p className="text-xl font-bold text-warning">{formatCurrency(totalJarsUSD)}</p>
+        </Card>
+      </div>
+
+      {/* Missing rates alert */}
+      {missingRates.length > 0 && (
+        <div className="bg-warning/10 border border-warning/30 rounded-xl p-4">
+          <p className="text-sm font-medium text-warning mb-2">Sin tasa de cambio para estas cuentas</p>
+          <ul className="space-y-1">
+            {missingRates.map((m, i) => (
+              <li key={i} className="text-xs text-text-muted">
+                {m.type === 'account' ? 'Cuenta' : 'Jarra'}: {m.name} ({m.currency}) — sin tasa USD/{m.currency}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      <Card>
-        <CardTitle className="mb-3">Resumen General</CardTitle>
-        <div className="space-y-2">
-          <div className="flex justify-between text-lg">
-            <span className="text-text-muted">Cuentas disponibles</span>
-            <span className="font-bold text-primary">{formatCurrency(totalUsdAccounts)}</span>
-          </div>
-          <div className="flex justify-between text-lg">
-            <span className="text-text-muted">Jarras asignadas</span>
-            <span className="font-bold text-secondary">{formatCurrency(totalJarsUsd)}</span>
-          </div>
-          <hr className="border-surface-light my-2" />
-          <div className="flex justify-between text-xl">
-            <span className={`font-semibold ${Math.abs(gap) < 0.01 * totalUsdAccounts ? 'text-secondary' : 'text-warning'}`}>
-              Diferencia total
-            </span>
-            <span className={`font-bold ${Math.abs(gap) < 0.01 * totalUsdAccounts ? 'text-secondary' : Math.abs(gap) > Math.abs(rateAdjustment) ? 'text-danger' : 'text-warning'}`}>
-              {gap >= 0 ? '+' : ''}{formatCurrency(gap)}
-            </span>
-          </div>
+      {/* Accounts breakdown */}
+      <Card padding="none">
+        <CardHeader className="px-5 pt-5">
+          <CardTitle>Cuentas</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-surface-light/40 text-xs text-text-muted">
+                <th className="px-5 py-2 text-left">Cuenta</th>
+                <th className="px-5 py-2 text-left">Tipo</th>
+                <th className="px-5 py-2 text-right">Saldo</th>
+                <th className="px-5 py-2 text-right">Eq. USD</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-light/40">
+              {accounts.length === 0 ? (
+                <tr><td colSpan={4} className="px-5 py-6 text-center text-text-muted">Sin cuentas</td></tr>
+              ) : accounts.map(a => {
+                const usd = toUSD(parseFloat(String(a.current_balance)), a.currency);
+                return (
+                  <tr key={a.id} className="hover:bg-surface-elevated/50">
+                    <td className="px-5 py-3 text-text font-medium">{a.name}</td>
+                    <td className="px-5 py-3 text-text-muted capitalize">{a.type === 'asset' ? 'Activo' : 'Pasivo'}</td>
+                    <td className="px-5 py-3 text-right font-mono text-text">
+                      {formatCurrency(parseFloat(String(a.current_balance)), a.currency)}
+                    </td>
+                    <td className="px-5 py-3 text-right font-mono text-text-muted">
+                      {usd !== null ? formatCurrency(usd) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </Card>
 
-      <Card>
-        <CardTitle className="mb-3">Análisis de la Diferencia</CardTitle>
-        <div className="space-y-3">
-          <div className="bg-background rounded-xl p-3">
-            <div className="flex justify-between text-sm mb-1">
-              <span>Cuentas al costo histórico USD</span>
-              <span className="font-medium">{formatCurrency(totalUsdCost)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-warning">
-              <span>+ Ajuste por tasa de cambio VES</span>
-              <span className="font-medium">
-                {rateAdjustment >= 0 ? '+' : ''}{formatCurrency(rateAdjustment)}
-              </span>
-            </div>
-            <hr className="border-surface-light my-1" />
-            <div className="flex justify-between text-sm font-semibold">
-              <span>= Cuentas al cambio actual</span>
-              <span>{formatCurrency(totalUsdAccounts)}</span>
-            </div>
+      {/* Jars breakdown */}
+      {jars.length > 0 && (
+        <Card padding="none">
+          <CardHeader className="px-5 pt-5">
+            <CardTitle>Jarras</CardTitle>
+          </CardHeader>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-light/40 text-xs text-text-muted">
+                  <th className="px-5 py-2 text-left">Jarra</th>
+                  <th className="px-5 py-2 text-right">Ahorrado</th>
+                  <th className="px-5 py-2 text-right">Meta</th>
+                  <th className="px-5 py-2 text-right">Eq. USD</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-light/40">
+                {jars.map(j => {
+                  const current = parseFloat(String(j.current_amount));
+                  const target = parseFloat(String(j.target_amount));
+                  const usd = toUSD(current, j.currency);
+                  return (
+                    <tr key={j.id} className="hover:bg-surface-elevated/50">
+                      <td className="px-5 py-3 text-text font-medium">{j.name}</td>
+                      <td className="px-5 py-3 text-right font-mono text-secondary">{formatCurrency(current, j.currency)}</td>
+                      <td className="px-5 py-3 text-right font-mono text-text-muted">{formatCurrency(target, j.currency)}</td>
+                      <td className="px-5 py-3 text-right font-mono text-text-muted">
+                        {usd !== null ? formatCurrency(usd) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
+        </Card>
+      )}
 
-          <div className="flex justify-between text-sm px-1 mb-1">
-            <span className="text-text-muted">Jarras total</span>
-            <span className="font-medium">{formatCurrency(totalJarsUsd)}</span>
-          </div>
-
-          <hr className="border-surface-light" />
-
-          <div className="bg-background rounded-xl p-3 space-y-2">
-            <p className="text-sm font-semibold mb-2">Diagnóstico</p>
-            {Math.abs(gap) < 1 && (
-              <div className="flex items-center gap-2 text-secondary text-sm">
-                <span>✓</span><span>¡Todo cuadra! Cuentas y jarras están alineadas.</span>
-              </div>
-            )}
-            {Math.abs(rateAdjustment) > 1 && (
-              <div className="flex items-center gap-2 text-warning text-sm">
-                <span>⟳</span>
-                <span>
-                  <strong>Ajuste por tasa de cambio:</strong> {formatCurrency(Math.abs(rateAdjustment))}
-                  {rateAdjustment > 0 ? ' (el VES subió vs USD)' : ' (el VES bajó vs USD)'}
-                </span>
-              </div>
-            )}
-            {Math.abs(gapAfterRate) > 1 && (
-              <div className="flex items-center gap-2 text-danger text-sm">
-                <span>!</span>
-                <span>
-                  <strong>Diferencia real:</strong> {formatCurrency(Math.abs(gapAfterRate))}
-                  {gapAfterRate > 0 ? ' — Dinero sin asignar en jarras.' : ' — Faltan transacciones por registrar.'}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      </Card>
-
-      <Card>
-        <CardTitle className="mb-3">Cuentas Disponibles</CardTitle>
-        <div className="space-y-3">
-          {usdAccounts.map((acc) => {
-            const isVES = acc.currency === 'VES';
-            const acq = acquisitions.find(a => a.account_id === acc.id);
-            return (
-              <div key={acc.id} className="border-b border-surface-light last:border-0 pb-3 last:pb-0">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium">{acc.name}</p>
-                    {isVES && (
-                      <p className="text-xs text-text-muted">
-                        {acc.balance.toLocaleString()} {acc.currency}
-                        {acc.rate && ` · 1 USD = ${acc.rate.toFixed(2)} VES`}
-                      </p>
-                    )}
-                  </div>
+      {/* Latest rates */}
+      {allCurrencies.length > 0 && (
+        <Card padding="none">
+          <CardHeader className="px-5 pt-5">
+            <CardTitle>Tasas activas (más recientes)</CardTitle>
+          </CardHeader>
+          <div className="divide-y divide-surface-light/40">
+            {allCurrencies.map(cur => {
+              const rate = exchangeRates.find(r => r.to_currency === cur);
+              if (!rate) return null;
+              return (
+                <div key={cur} className="flex items-center justify-between px-5 py-3">
+                  <p className="text-sm text-text">{rate.from_currency} → {rate.to_currency}</p>
                   <div className="text-right">
-                    <p className="text-sm font-semibold">{formatCurrency(acc.usdValue)}</p>
-                    {isVES && acc.usdCost !== null && acc.usdCost !== acc.usdValue && (
-                      <p className="text-xs text-text-muted">Costo: {formatCurrency(acc.usdCost)}</p>
-                    )}
+                    <p className="text-sm font-mono text-text">{Number(rate.rate).toLocaleString('es-VE', { maximumFractionDigits: 4 })}</p>
+                    <p className="text-xs text-text-muted">{rate.date}</p>
                   </div>
                 </div>
-                {isVES && (
-                  <div className="mt-2 flex items-center gap-2">
-                    {editingAcq === acc.id ? (
-                      <div className="flex-1 flex items-center gap-2">
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={acqForm.rate}
-                          onChange={e => setAcqForm({ rate: e.target.value })}
-                          className="flex-1 bg-background border border-surface-light rounded-lg px-2 py-1 text-xs text-text focus:outline-none focus:ring-1 focus:ring-primary"
-                          placeholder="Tasa de adquisición"
-                        />
-                        <button onClick={() => saveAcquisition(acc.id)} className="bg-primary text-white text-xs px-2 py-1 rounded-lg">Guardar</button>
-                        <button onClick={() => { setEditingAcq(null); setAcqForm({ rate: '' }); }} className="text-text-muted text-xs">×</button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setEditingAcq(acc.id);
-                          setAcqForm({ rate: acq?.average_rate?.toString() || acc.rate?.toString() || '' });
-                        }}
-                        className="text-xs text-primary hover:underline"
-                      >
-                        {acq?.average_rate ? `Tasa adquisición: 1 USD = ${acq.average_rate.toFixed(2)} VES (editar)` : 'Configurar tasa de adquisición histórica'}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {accounts.filter(a => a.excluded).length > 0 && (
-            <div className="pt-3 border-t border-surface-light">
-              <p className="text-xs text-text-muted mb-2">Excluidas de conciliación:</p>
-              {accounts.filter(a => a.excluded).map(acc => (
-                <div key={acc.id} className="flex justify-between text-sm text-text-muted py-1">
-                  <span>{acc.name}</span>
-                  <span>{formatCurrency(acc.balance, acc.currency as any)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Card>
-
-      <Card>
-        <CardTitle className="mb-3">Jarras Asignadas</CardTitle>
-        <div className="space-y-2">
-          {jars.length === 0 && <p className="text-text-muted text-sm text-center py-2">Sin jarras configuradas</p>}
-          {jars.map(jar => (
-            <div key={jar.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
-              <div>
-                <p className="text-sm font-medium">{jar.name}</p>
-                {jar.target > 0 && (
-                  <p className="text-xs text-text-muted">
-                    Meta: {formatCurrency(jar.target, jar.currency as any)}
-                    {jar.target > 0 && ` (${Math.round((jar.amount / jar.target) * 100)}%)`}
-                  </p>
-                )}
-              </div>
-              <p className="text-sm font-semibold">{formatCurrency(jar.usdValue)}</p>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <div className="bg-background border border-surface-light rounded-xl p-4 text-xs text-text-muted space-y-2">
-        <p className="font-semibold text-text">¿Cómo leer esto?</p>
-        <p><strong className="text-text">Diferencia total</strong> = Cuentas (USD) − Jarras. Incluye el efecto de tasa de cambio.</p>
-        <p><strong className="text-text">Ajuste por tasa</strong> = Diferencia entre costo histórico y valor actual de VES.</p>
-        <p><strong className="text-text">Diferencia real</strong> = Diferencia total − Ajuste por tasa. Si es distinto de cero, faltan o sobran registros.</p>
-      </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

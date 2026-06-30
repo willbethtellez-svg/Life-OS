@@ -1,411 +1,354 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
+import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
-import { formatCurrency } from '@/lib/utils';
-import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { Input, Field, Select } from '@/components/ui/Input';
-import { Spinner } from '@/components/ui/Spinner';
-import type { CurrencyCode } from '@/types';
+import { formatCurrency, formatDate, generateId } from '@/lib/utils';
+import { Card, CardHeader, CardTitle, Button, Input, Select, Field, Badge } from '@/components/ui';
+import type { Account, CurrencyCode, Transaction } from '@/types';
 
-export default function AccountsPage() {
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [selected, setSelected] = useState<any | null>(null);
-  const [txHistory, setTxHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showReconcile, setShowReconcile] = useState(false);
-  const [reconcileAmount, setReconcileAmount] = useState('');
+const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
+const ACC_TYPES = [{ value: 'asset', label: 'Activo' }, { value: 'liability', label: 'Pasivo' }];
+
+interface AccForm {
+  name: string;
+  type: 'asset' | 'liability';
+  currency: CurrencyCode;
+  initial_balance: string;
+  include_in_net_worth: boolean;
+}
+
+const emptyForm = (): AccForm => ({
+  name: '', type: 'asset', currency: 'USD', initial_balance: '0', include_in_net_worth: true,
+});
+
+export default function Accounts() {
+  const { accounts, addAccount, updateAccount, removeAccount } = useAppStore();
+  const [form, setForm] = useState<AccForm>(emptyForm());
+  const [editId, setEditId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [realBalances, setRealBalances] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  // Ledger state
+  const [ledger, setLedger] = useState<Account | null>(null);
+  const [txHistory, setTxHistory] = useState<Transaction[]>([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
 
-  const [form, setForm] = useState({
-    name: '', type: 'asset' as 'asset' | 'liability', currency: 'USD' as CurrencyCode, initialBalance: '',
-  });
-
-  const fetchAccounts = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await db.accounts.list();
-      setAccounts(list);
-    } catch (err) { console.error(err); setError('Error al cargar cuentas'); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setError('');
-    if (!form.name.trim()) { setError('Nombre requerido'); return; }
-    try {
-      if (editingId) {
-        await db.accounts.update(editingId, {
-          name: form.name.trim(), type: form.type, currency: form.currency,
-          initial_balance: parseFloat(form.initialBalance) || 0,
-          current_balance: parseFloat(form.initialBalance) || 0,
-        });
-      } else {
-        await db.accounts.create({
-          name: form.name.trim(), type: form.type, currency: form.currency,
-          initial_balance: parseFloat(form.initialBalance) || 0,
-          current_balance: parseFloat(form.initialBalance) || 0,
-        });
-      }
-      resetForm();
-      fetchAccounts();
-    } catch (err: any) { setError(err.message || 'Error'); }
-  }
-
-  function startEdit(acc: any) {
-    setForm({ name: acc.name, type: acc.type, currency: acc.currency, initialBalance: acc.initial_balance?.toString() || '' });
-    setEditingId(acc.id);
+  function openForm(acc?: Account) {
+    if (acc) {
+      setEditId(acc.id);
+      setForm({
+        name: acc.name, type: acc.type, currency: acc.currency,
+        initial_balance: String(acc.initial_balance),
+        include_in_net_worth: acc.include_in_net_worth,
+      });
+    } else {
+      setEditId(null);
+      setForm(emptyForm());
+    }
     setShowForm(true);
   }
 
-  function resetForm() {
-    setForm({ name: '', type: 'asset', currency: 'USD', initialBalance: '' });
-    setEditingId(null);
+  function closeForm() {
     setShowForm(false);
+    setEditId(null);
+    setForm(emptyForm());
+    setError('');
   }
 
-  async function loadTransactions(account: any, start?: string, end?: string) {
-    setSelected(account);
-    setTxHistory([]);
+  const f = (k: keyof AccForm, v: string | boolean) => setForm(prev => ({ ...prev, [k]: v }));
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+    const bal = parseFloat(form.initial_balance) || 0;
     try {
-      const txs = await db.accounts.transactions(account.id, { limit: 200, start, end });
-      setTxHistory(txs);
-    } catch (err) { console.error(err); }
-  }
-
-  async function applyFilter() {
-    if (!selected) return;
-    try {
-      const txs = await db.accounts.transactions(selected.id, { limit: 200, start: filterStart || undefined, end: filterEnd || undefined });
-      setTxHistory(txs);
-    } catch (err) { console.error(err); }
-  }
-
-  function getAmountForAccount(tx: any): number {
-    if (tx.type === 'transfer' && tx.destination_account_id === selected?.id && tx.foreign_amount) {
-      return parseFloat(String(tx.foreign_amount));
+      if (editId) {
+        const prev = accounts.find(a => a.id === editId)!;
+        const optimistic: Account = { ...prev, name: form.name, type: form.type, currency: form.currency as CurrencyCode, initial_balance: bal, include_in_net_worth: form.include_in_net_worth };
+        updateAccount(editId, optimistic);
+        closeForm();
+        const real = await db.accounts.update(editId, { name: form.name, type: form.type, currency: form.currency as CurrencyCode, initial_balance: bal, include_in_net_worth: form.include_in_net_worth });
+        updateAccount(editId, real);
+      } else {
+        const tempId = generateId();
+        const optimistic: Account = {
+          id: tempId, user_id: '', name: form.name, type: form.type,
+          currency: form.currency as CurrencyCode, initial_balance: bal, current_balance: bal,
+          include_in_net_worth: form.include_in_net_worth, active: true,
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        };
+        addAccount(optimistic);
+        closeForm();
+        const real = await db.accounts.create({ name: form.name, type: form.type, currency: form.currency as CurrencyCode, initial_balance: bal, current_balance: bal, include_in_net_worth: form.include_in_net_worth });
+        updateAccount(tempId, real);
+      }
+    } catch {
+      setError('Error al guardar la cuenta');
+      setSaving(false);
+      return;
     }
-    return parseFloat(tx.amount || '0');
-  }
-
-  function computeRunningBalance(tx: any, index: number, txList?: any[]): number {
-    const initial = parseFloat(selected?.initial_balance || '0');
-    const list = txList || txHistory;
-    let balance = initial;
-    for (let i = 0; i <= index; i++) {
-      const t = list[i];
-      if (!t) continue;
-      const amt = getAmountForAccount(t);
-      if (t.source_account_id === selected?.id) balance -= amt;
-      if (t.destination_account_id === selected?.id) balance += amt;
-    }
-    return balance;
-  }
-
-  async function handleReconcile() {
-    if (!selected || !reconcileAmount) return;
-    const newBalance = parseFloat(reconcileAmount);
-    if (isNaN(newBalance)) return;
-    try {
-      await db.accounts.update(selected.id, { current_balance: newBalance, initial_balance: newBalance });
-      setShowReconcile(false); setReconcileAmount(''); fetchAccounts();
-    } catch (err) { console.error(err); }
+    setSaving(false);
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta cuenta?')) return;
-    try { await db.accounts.delete(id); fetchAccounts(); } catch (err) { console.error(err); }
+    const prev = accounts.find(a => a.id === id)!;
+    removeAccount(id);
+    try {
+      await db.accounts.delete(id);
+    } catch {
+      addAccount(prev);
+      setError('Error al eliminar');
+    }
   }
 
-  const totalUSD = accounts.reduce((sum: number, acc: any) => {
-    const balance = parseFloat(acc.current_balance || '0');
-    if (acc.currency === 'USD' || acc.currency === 'USDT') return sum + balance;
-    return sum;
-  }, 0);
+  async function openLedger(acc: Account) {
+    setLedger(acc);
+    setLedgerLoading(true);
+    setFilterStart('');
+    setFilterEnd('');
+    setSortOrder('asc');
+    const txs = await db.accounts.transactions(acc.id, { limit: 200 });
+    setTxHistory(txs);
+    setLedgerLoading(false);
+  }
 
-  // ─── Account detail / ledger view ─────────────────────────
-  if (selected) {
-    const balance = parseFloat(selected.current_balance || '0');
-    const currency = selected.currency || 'USD';
-    const displayTxs = [...txHistory].sort((a: any, b: any) => {
-      const cmp = a.date.localeCompare(b.date);
-      return sortOrder === 'asc' ? cmp : -cmp;
+  async function applyFilter() {
+    if (!ledger) return;
+    setLedgerLoading(true);
+    const txs = await db.accounts.transactions(ledger.id, {
+      limit: 200,
+      start: filterStart || undefined,
+      end: filterEnd || undefined,
     });
+    setTxHistory(txs);
+    setLedgerLoading(false);
+  }
+
+  function computeRunningBalance(index: number, txList: Transaction[]): number {
+    if (!ledger) return 0;
+    const initial = parseFloat(String(ledger.initial_balance));
+    let bal = initial;
+    for (let i = 0; i <= index; i++) {
+      const tx = txList[i];
+      if (tx.source_account_id === ledger.id) bal -= parseFloat(String(tx.amount));
+      else if (tx.destination_account_id === ledger.id) {
+        bal += parseFloat(String(tx.foreign_amount ?? tx.amount));
+      }
+    }
+    return bal;
+  }
+
+  const displayTxs = [...txHistory].sort((a, b) =>
+    sortOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
+  );
+
+  // Ledger view
+  if (ledger) {
     return (
-      <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
+      <div className="p-4 lg:p-6 max-w-4xl mx-auto space-y-4">
         <div className="flex items-center gap-3">
-          <button onClick={() => { setSelected(null); setFilterStart(''); setFilterEnd(''); }} className="text-text-muted hover:text-text p-2 rounded-xl hover:bg-surface-elevated transition-colors">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+          <button onClick={() => setLedger(null)} className="text-text-muted hover:text-text p-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
           </button>
           <div className="flex-1">
-            <h1 className="text-lg font-bold">{selected.name}</h1>
-            <p className="text-xs text-text-muted">{currency} · {selected.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
+            <h1 className="text-lg font-bold text-text">{ledger.name}</h1>
+            <p className="text-xs text-text-muted">{ledger.currency} · Libro contable</p>
           </div>
-          <div className="text-right">
-            <p className="text-2xl font-bold text-primary">{formatCurrency(balance, currency)}</p>
-          </div>
+          <span className="text-lg font-bold text-text">
+            {formatCurrency(parseFloat(String(ledger.current_balance)), ledger.currency)}
+          </span>
         </div>
 
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowReconcile(!showReconcile)}>
-            {showReconcile ? 'Cancelar' : 'Conciliar'}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => { startEdit(selected); setSelected(null); }}>
-            Editar cuenta
-          </Button>
-        </div>
-
-        {/* Date filter + sort */}
+        {/* Filters */}
         <Card padding="sm">
-          <div className="flex flex-wrap items-end gap-3">
-            <Field label="Desde">
-              <Input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} className="py-1.5 text-sm" />
+          <div className="flex flex-wrap gap-3 items-end">
+            <Field label="Desde" className="flex-1 min-w-[120px]">
+              <Input type="date" value={filterStart} onChange={e => setFilterStart(e.target.value)} />
             </Field>
-            <Field label="Hasta">
-              <Input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} className="py-1.5 text-sm" />
+            <Field label="Hasta" className="flex-1 min-w-[120px]">
+              <Input type="date" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} />
             </Field>
-            <Button size="sm" variant="outline" onClick={applyFilter}>Filtrar</Button>
-            <Button size="sm" variant="ghost" onClick={() => { setFilterStart(''); setFilterEnd(''); loadTransactions(selected); }}>
-              Limpiar
+            <Button variant="outline" size="sm" onClick={applyFilter}>Filtrar</Button>
+            <Button variant="ghost" size="sm" onClick={() => setSortOrder(s => s === 'asc' ? 'desc' : 'asc')}>
+              {sortOrder === 'asc' ? '↑ Antiguo' : '↓ Nuevo'}
             </Button>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="text-xs text-text-muted">Orden:</span>
-              <button onClick={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')}
-                className="flex items-center gap-1 text-xs text-primary hover:underline">
-                {sortOrder === 'asc' ? 'Más antiguo primero' : 'Más reciente primero'}
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  {sortOrder === 'asc' ? <path d="M12 5v14M5 12l7-7 7 7" /> : <path d="M12 19V5M5 12l7 7 7-7" />}
-                </svg>
-              </button>
-            </div>
           </div>
         </Card>
 
-        {showReconcile && (
-          <Card>
-            <p className="text-sm font-medium mb-3">Saldo real de la cuenta</p>
-            <div className="space-y-3">
-              <Input
-                type="number"
-                step="0.01"
-                value={reconcileAmount}
-                onChange={e => setReconcileAmount(e.target.value)}
-                placeholder={balance.toString()}
-              />
-              {reconcileAmount && (
-                <div className={`text-sm font-medium ${parseFloat(reconcileAmount) !== balance ? 'text-warning' : 'text-primary'}`}>
-                  Diferencia: {formatCurrency(parseFloat(reconcileAmount) - balance, currency)}
-                </div>
-              )}
-              <Button onClick={handleReconcile} size="md" className="w-full">Guardar saldo</Button>
-            </div>
-          </Card>
-        )}
-
-        {/* Ledger */}
-        <Card padding="none">
-          <div className="px-5 py-4 border-b border-surface-light/60">
-            <CardTitle>Libro contable</CardTitle>
-          </div>
-          <div className="hidden lg:block overflow-x-auto">
-            <table className="w-full">
+        {/* Desktop table */}
+        <Card padding="none" className="hidden sm:block">
+          {ledgerLoading ? (
+            <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+          ) : (
+            <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-surface-light/40 bg-surface-elevated/30">
-                  <th className="text-left px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Fecha</th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Descripción</th>
-                  <th className="text-right px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Debe</th>
-                  <th className="text-right px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Haber</th>
-                  <th className="text-right px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Saldo</th>
+                <tr className="border-b border-surface-light/40 text-xs text-text-muted">
+                  <th className="px-5 py-3 text-left">Fecha</th>
+                  <th className="px-5 py-3 text-left">Descripción</th>
+                  <th className="px-5 py-3 text-right">Debe</th>
+                  <th className="px-5 py-3 text-right">Haber</th>
+                  <th className="px-5 py-3 text-right">Saldo</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-surface-light/30">
-                {txHistory.length === 0 ? (
-                  <tr><td colSpan={5} className="text-center py-10 text-text-muted text-sm">Sin movimientos</td></tr>
-                ) : (
-                  displayTxs.map((tx: any, i: number) => {
-                    const amount = getAmountForAccount(tx);
-                    const isDebit = tx.destination_account_id === selected.id;
-                    const isCredit = tx.source_account_id === selected.id;
-                    const running = computeRunningBalance(tx, i, displayTxs);
-                    return (
-                      <tr key={tx.id} className="hover:bg-surface-elevated/40 transition-colors">
-                        <td className="px-5 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
-                        <td className="px-5 py-3">
-                          <p className="text-sm font-medium truncate max-w-xs">{tx.description || 'Sin descripción'}</p>
-                          {tx.type === 'transfer' && isDebit && <p className="text-[11px] text-text-muted">desde {tx.source_name || 'origen'}</p>}
-                          {tx.type === 'transfer' && isCredit && <p className="text-[11px] text-text-muted">hacia {tx.destination_name || 'destino'}</p>}
-                        </td>
-                        <td className="px-5 py-3 text-right text-sm font-medium text-primary">{isDebit ? formatCurrency(amount, currency) : ''}</td>
-                        <td className="px-5 py-3 text-right text-sm font-medium text-danger">{isCredit ? formatCurrency(amount, currency) : ''}</td>
-                        <td className="px-5 py-3 text-right text-sm font-semibold text-text">{formatCurrency(running, currency)}</td>
-                      </tr>
-                    );
-                  })
-                )}
+              <tbody className="divide-y divide-surface-light/40">
+                <tr className="bg-surface-elevated/40">
+                  <td className="px-5 py-2 text-xs text-text-muted">{ledger.created_at.split('T')[0]}</td>
+                  <td className="px-5 py-2 text-xs text-text-muted italic">Saldo inicial</td>
+                  <td className="px-5 py-2" />
+                  <td className="px-5 py-2" />
+                  <td className="px-5 py-2 text-right text-xs font-mono text-text-muted">
+                    {formatCurrency(parseFloat(String(ledger.initial_balance)), ledger.currency)}
+                  </td>
+                </tr>
+                {displayTxs.map((tx, i) => {
+                  const isDebit = tx.source_account_id === ledger.id;
+                  const amt = parseFloat(String(isDebit ? tx.amount : (tx.foreign_amount ?? tx.amount)));
+                  const runBal = computeRunningBalance(i, displayTxs);
+                  return (
+                    <tr key={tx.id} className="hover:bg-surface-elevated/50">
+                      <td className="px-5 py-3 text-text-muted">{formatDate(tx.date)}</td>
+                      <td className="px-5 py-3 text-text">{tx.description || '—'}</td>
+                      <td className="px-5 py-3 text-right font-mono text-danger">
+                        {isDebit ? formatCurrency(amt, ledger.currency) : ''}
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono text-secondary">
+                        {!isDebit ? formatCurrency(amt, ledger.currency) : ''}
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono text-text">
+                        {formatCurrency(runBal, ledger.currency)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </div>
-          <div className="lg:hidden divide-y divide-surface-light/30">
-            {displayTxs.length === 0 ? (
-              <div className="py-10 text-center text-text-muted text-sm">Sin movimientos</div>
-            ) : (
-              displayTxs.map((tx: any, i: number) => {
-                const amount = getAmountForAccount(tx);
-                const isCredit = tx.source_account_id === selected.id;
-                const running = computeRunningBalance(tx, i);
-                return (
-                  <div key={tx.id} className="flex items-center justify-between px-5 py-3.5">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{tx.description || 'Sin descripción'}</p>
-                      <p className="text-xs text-text-muted">{tx.date}</p>
-                    </div>
-                    <div className="text-right ml-3">
-                      <span className={`text-sm font-semibold ${isCredit ? 'text-danger' : 'text-primary'}`}>
-                        {isCredit ? '−' : '+'}{formatCurrency(amount, currency)}
-                      </span>
-                      <p className="text-[11px] text-text-muted">{formatCurrency(running, currency)}</p>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+          )}
         </Card>
+
+        {/* Mobile list */}
+        <div className="sm:hidden space-y-2">
+          {ledgerLoading ? (
+            <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+          ) : displayTxs.map((tx, i) => {
+            const isDebit = tx.source_account_id === ledger.id;
+            const amt = parseFloat(String(isDebit ? tx.amount : (tx.foreign_amount || tx.amount)));
+            const runBal = computeRunningBalance(i, displayTxs);
+            return (
+              <Card key={tx.id} padding="sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-text">{tx.description || '—'}</p>
+                    <p className="text-xs text-text-muted">{formatDate(tx.date)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-sm font-semibold ${isDebit ? 'text-danger' : 'text-secondary'}`}>
+                      {isDebit ? '−' : '+'}{formatCurrency(amt, ledger.currency)}
+                    </p>
+                    <p className="text-xs text-text-muted font-mono">{formatCurrency(runBal, ledger.currency)}</p>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
       </div>
     );
   }
 
-  // ─── Account list ─────────────────────────────────────────
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
+    <div className="p-4 lg:p-6 max-w-4xl mx-auto space-y-5">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold">Cuentas</h1>
-          <p className="text-sm text-text-muted">Gestiona tus cuentas bancarias</p>
-        </div>
-        <Button
-          size="icon"
-          onClick={() => { resetForm(); setShowForm(!showForm); }}
-          className="rounded-full w-10 h-10"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            {showForm ? <path d="M6 18L18 6M6 6l12 12" /> : <path d="M12 5v14M5 12h14" />}
-          </svg>
+        <h1 className="text-xl font-bold text-text">Cuentas</h1>
+        <Button onClick={() => openForm()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
+          Nueva
         </Button>
       </div>
 
-      {error && <div className="bg-danger/10 border border-danger/20 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
+      {error && (
+        <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>
+      )}
 
-      {showForm && (
-        <Card>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-              <Field label="Nombre">
-                <Input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej. Bco Familiar" required />
-              </Field>
-              <Field label="Tipo">
-                <Select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}>
-                  <option value="asset">Activo</option>
-                  <option value="liability">Pasivo</option>
-                </Select>
-              </Field>
-              <Field label="Moneda">
-                <Select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value as CurrencyCode }))}>
-                  <option value="USD">USD</option><option value="VES">VES</option><option value="EUR">EUR</option><option value="BTC">BTC</option><option value="USDT">USDT</option>
-                </Select>
-              </Field>
+      {/* List */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {accounts.map(acc => (
+          <Card key={acc.id} padding="sm" className="cursor-pointer hover:border-surface-light transition-colors" onClick={() => openLedger(acc)}>
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex-1 min-w-0 mr-2">
+                <p className="font-semibold text-text truncate">{acc.name}</p>
+                <p className="text-xs text-text-muted mt-0.5">{acc.currency} · {acc.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
+              </div>
+              <div className="flex gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                <Button size="icon" variant="ghost" onClick={() => openForm(acc)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                </Button>
+                <Button size="icon" variant="danger" onClick={() => handleDelete(acc.id)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
+                </Button>
+              </div>
             </div>
-            <Field label="Saldo inicial">
-              <Input type="number" step="0.01" value={form.initialBalance} onChange={e => setForm(f => ({ ...f, initialBalance: e.target.value }))} placeholder="0.00" />
-            </Field>
-            <div className="flex gap-2">
-              <Button type="submit" className="flex-1">{editingId ? 'Guardar' : 'Crear cuenta'}</Button>
-              <Button type="button" variant="ghost" onClick={resetForm}>Cancelar</Button>
-            </div>
-          </form>
+            <p className={`text-xl font-bold ${acc.type === 'liability' ? 'text-danger' : 'text-text'}`}>
+              {formatCurrency(parseFloat(String(acc.current_balance)), acc.currency)}
+            </p>
+            {!acc.include_in_net_worth && (
+              <Badge variant="warning" className="mt-2 text-xs">Excluida del patrimonio</Badge>
+            )}
+          </Card>
+        ))}
+      </div>
+
+      {accounts.length === 0 && (
+        <Card className="text-center py-12">
+          <p className="text-text-muted mb-3">Sin cuentas aún</p>
+          <Button onClick={() => openForm()}>Crear primera cuenta</Button>
         </Card>
       )}
 
-      {/* Total card */}
-      <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Total (USD + USDT)</p>
-            <p className="text-3xl font-bold text-primary">{formatCurrency(totalUSD)}</p>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary">
-              <path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-            </svg>
+      {/* Form — bottom sheet on mobile, inline panel on desktop */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center">
+          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeForm} />
+          <div className="relative w-full lg:max-w-md bg-surface rounded-t-2xl lg:rounded-2xl border border-surface-light/60 p-5 z-10">
+            <div className="w-10 h-1 bg-surface-light rounded-full mx-auto mb-5 lg:hidden" />
+            <h2 className="text-base font-semibold text-text mb-4">
+              {editId ? 'Editar cuenta' : 'Nueva cuenta'}
+            </h2>
+            {error && <div className="bg-danger/10 border border-danger/30 rounded-xl px-3 py-2 text-sm text-danger mb-3">{error}</div>}
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <Field label="Nombre">
+                <Input value={form.name} onChange={e => f('name', e.target.value)} placeholder="Ej: Banco Nacional" required />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Tipo">
+                  <Select value={form.type} onChange={e => f('type', e.target.value)}>
+                    {ACC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Moneda">
+                  <Select value={form.currency} onChange={e => f('currency', e.target.value)}>
+                    {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </Select>
+                </Field>
+              </div>
+              <Field label="Saldo inicial">
+                <Input type="number" step="any" value={form.initial_balance} onChange={e => f('initial_balance', e.target.value)} />
+              </Field>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={form.include_in_net_worth} onChange={e => f('include_in_net_worth', e.target.checked)} className="w-4 h-4 accent-primary" />
+                <span className="text-sm text-text">Incluir en patrimonio neto</span>
+              </label>
+              <div className="flex gap-3 pt-2">
+                <Button variant="outline" className="flex-1" onClick={closeForm} type="button">Cancelar</Button>
+                <Button type="submit" loading={saving} className="flex-1">Guardar</Button>
+              </div>
+            </form>
           </div>
         </div>
-      </Card>
-
-      {/* Account list */}
-      <div className="space-y-2">
-        {loading ? (
-          <Spinner fullPage />
-        ) : accounts.length === 0 ? (
-          <div className="text-center py-12 text-text-muted">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="mx-auto mb-3 opacity-40"><path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
-            <p className="text-sm">No hay cuentas creadas</p>
-          </div>
-        ) : (
-          accounts.map((acc: any) => {
-            const balance = parseFloat(acc.current_balance || '0');
-            const currency = acc.currency || 'USD';
-            const realVal = realBalances[acc.id];
-            const realNum = realVal ? parseFloat(realVal) : null;
-            const diff = realNum !== null ? realNum - balance : null;
-            return (
-              <Card key={acc.id} className="hover:border-surface-elevated cursor-pointer transition-colors" padding="sm">
-                <div className="flex items-center justify-between" onClick={() => loadTransactions(acc)}>
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-surface-elevated flex items-center justify-center shrink-0">
-                      <span className="text-xs font-bold text-text-muted">{acc.currency}</span>
-                    </div>
-                    <div>
-                      <p className="font-medium text-sm">{acc.name}</p>
-                      <p className="text-xs text-text-muted">{acc.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className={`font-bold ${balance >= 0 ? 'text-primary' : 'text-danger'}`}>
-                      {formatCurrency(balance, currency)}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-surface-light/40" onClick={e => e.stopPropagation()}>
-                  <label className="text-[10px] text-text-muted whitespace-nowrap">Saldo real:</label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={realVal || ''}
-                    onChange={e => setRealBalances(prev => ({ ...prev, [acc.id]: e.target.value }))}
-                    className="flex-1 py-1.5 text-xs rounded-lg"
-                    placeholder={balance.toString()}
-                  />
-                  {diff !== null && diff !== 0 && (
-                    <span className={`text-[10px] font-medium whitespace-nowrap ${diff > 0 ? 'text-primary' : 'text-danger'}`}>
-                      {diff > 0 ? '+' : ''}{formatCurrency(diff, currency)}
-                    </span>
-                  )}
-                  <button onClick={() => startEdit(acc)} className="text-[10px] text-primary hover:underline whitespace-nowrap">Editar</button>
-                  <button onClick={() => handleDelete(acc.id)} className="text-[10px] text-danger hover:underline">✕</button>
-                </div>
-              </Card>
-            );
-          })
-        )}
-      </div>
+      )}
     </div>
   );
 }
