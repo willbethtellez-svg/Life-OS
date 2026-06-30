@@ -40,6 +40,51 @@ async function convertCurrency(amount: number, from: string, to: string, date?: 
   return usdAmount * rate;
 }
 
+// Recalcula la tasa P2P promedio del día para un par de monedas, a partir de
+// todas las transferencias reales registradas ese día (suma destino / suma origen).
+// No sobreescribe una tasa cargada manualmente como 'official'.
+async function recalcP2PRate(
+  date: string | null | undefined,
+  fromCurrency: string | null | undefined,
+  toCurrency: string | null | undefined,
+): Promise<void> {
+  if (!date || !fromCurrency || !toCurrency || fromCurrency === toCurrency) return;
+  const user = await getUser();
+
+  const { data: txs } = await supabase
+    .from('transactions')
+    .select('amount, foreign_amount')
+    .eq('type', 'transfer')
+    .eq('date', date)
+    .eq('currency', fromCurrency)
+    .eq('foreign_currency', toCurrency)
+    .not('foreign_amount', 'is', null);
+
+  if (!txs || txs.length === 0) {
+    await supabase.from('exchange_rates').delete()
+      .eq('user_id', user?.id).eq('date', date)
+      .eq('from_currency', fromCurrency).eq('to_currency', toCurrency)
+      .eq('source', 'p2p_average');
+    return;
+  }
+
+  const { data: existing } = await supabase
+    .from('exchange_rates').select('source')
+    .eq('user_id', user?.id).eq('date', date)
+    .eq('from_currency', fromCurrency).eq('to_currency', toCurrency)
+    .maybeSingle();
+  if (existing?.source === 'official') return;
+
+  const sumFrom = txs.reduce((s, t) => s + parseFloat(String(t.amount || 0)), 0);
+  const sumTo = txs.reduce((s, t) => s + parseFloat(String(t.foreign_amount || 0)), 0);
+  if (sumFrom <= 0) return;
+
+  await supabase.from('exchange_rates').upsert({
+    user_id: user?.id, date, from_currency: fromCurrency, to_currency: toCurrency,
+    rate: sumTo / sumFrom, source: 'p2p_average', transactions_used: txs.length,
+  }, { onConflict: 'user_id,date,from_currency,to_currency' });
+}
+
 // Batch enrichment — O(3 queries) regardless of list size, replaces the old O(n*5) approach
 async function enrichTransactions(txs: any[]): Promise<any[]> {
   if (txs.length === 0) return txs;
@@ -199,6 +244,10 @@ export const db = {
         }
       }
 
+      if (type === 'transfer' && tx.foreign_amount && tx.foreign_currency && tx.foreign_currency !== txCurrency) {
+        await recalcP2PRate(txDate, txCurrency, tx.foreign_currency);
+      }
+
       return data;
     },
     update: async (id: string, updates: Partial<Transaction>): Promise<Transaction> => {
@@ -297,6 +346,14 @@ export const db = {
         }
       }
 
+      const foreignCurrency = updates.foreign_currency ?? orig?.foreign_currency;
+      if (orig?.type === 'transfer' && orig.foreign_amount && orig.foreign_currency && orig.foreign_currency !== orig.currency) {
+        await recalcP2PRate(orig.date, orig.currency, orig.foreign_currency);
+      }
+      if (type === 'transfer' && foreignAmount && foreignCurrency && foreignCurrency !== txCurrency) {
+        await recalcP2PRate(txDate, txCurrency, foreignCurrency);
+      }
+
       return data;
     },
     delete: async (id: string): Promise<void> => {
@@ -338,6 +395,10 @@ export const db = {
       }
       const { error } = await supabase.from('transactions').delete().eq('id', id);
       if (error) throw error;
+
+      if (orig?.type === 'transfer' && orig.foreign_amount && orig.foreign_currency && orig.foreign_currency !== orig.currency) {
+        await recalcP2PRate(orig.date, orig.currency, orig.foreign_currency);
+      }
     },
   },
 

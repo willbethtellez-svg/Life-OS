@@ -47,7 +47,7 @@ const typeBg: Record<TransactionType, string> = {
 };
 
 export default function Transactions() {
-  const { accounts, categories, jars, liabilities } = useAppStore();
+  const { accounts, categories, jars, liabilities, setRates } = useAppStore();
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -163,6 +163,7 @@ export default function Transactions() {
       try {
         const real = await db.transactions.update(editTx.id, payload);
         setTxs(prev => prev.map(t => t.id === editTx.id ? enrichFromStore(real) : t));
+        if (isCrossCurrencyTransfer(editTx) || isCrossCurrencyTransfer(payload)) await syncRates();
       } catch {
         setTxs(prev => prev.map(t => t.id === editTx.id ? editTx : t));
         setError('Error al actualizar la transacción');
@@ -192,6 +193,7 @@ export default function Transactions() {
     try {
       const real = await db.transactions.create(payload);
       setTxs(prev => prev.map(t => t.id === tempId ? enrichFromStore(real) : t));
+      if (isCrossCurrencyTransfer(payload)) await syncRates();
 
       // Vincular a préstamo:
       // gasto → suma a la deuda (increase), ingreso → paga la deuda (payment)
@@ -220,6 +222,7 @@ export default function Transactions() {
     setTxs(prev => prev.filter(t => t.id !== tx.id));
     try {
       await db.transactions.delete(tx.id);
+      if (isCrossCurrencyTransfer(tx)) await syncRates();
     } catch {
       setTxs(prev => [tx, ...prev].sort((a, b) => b.date.localeCompare(a.date)));
       setError('Error al eliminar');
@@ -228,6 +231,16 @@ export default function Transactions() {
 
   function applyFilter() {
     loadTxs({ type: filterType || undefined, start: filterStart || undefined, end: filterEnd || undefined });
+  }
+
+  function isCrossCurrencyTransfer(t: Partial<Transaction> | null): boolean {
+    if (!t || t.type !== 'transfer') return false;
+    return !!t.foreign_amount && !!t.foreign_currency && t.foreign_currency !== t.currency;
+  }
+
+  async function syncRates() {
+    const rates = await db.exchangeRates.getAll();
+    setRates(rates);
   }
 
   const assetAccounts = accounts.filter(a => a.type === 'asset');
@@ -308,18 +321,29 @@ export default function Transactions() {
                       {typeLabel[tx.type]}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-text-muted max-w-[120px] truncate">
-                    {tx.source_name || tx.destination_name || '—'}
+                  <td className="px-4 py-3 text-text-muted max-w-[160px] truncate">
+                    {tx.type === 'transfer'
+                      ? `${tx.source_name || '—'} → ${tx.destination_name || '—'}`
+                      : (tx.source_name || tx.destination_name || '—')}
                   </td>
-                  <td className="px-4 py-3 text-text-muted max-w-[100px] truncate">
-                    {tx.piggy_bank_name || '—'}
+                  <td className="px-4 py-3 text-text-muted max-w-[140px] truncate">
+                    {tx.type === 'transfer' && (tx.piggy_bank_name || tx.destination_piggy_bank_name)
+                      ? `${tx.piggy_bank_name || '—'} → ${tx.destination_piggy_bank_name || '—'}`
+                      : (tx.piggy_bank_name || '—')}
                   </td>
                   <td className="px-4 py-3 text-text-muted max-w-[100px] truncate">
                     {tx.category_name || '—'}
                   </td>
-                  <td className={`px-4 py-3 text-right font-semibold font-mono ${typeColor[tx.type]}`}>
-                    {tx.type === 'withdrawal' ? '−' : tx.type === 'deposit' ? '+' : ''}
-                    {formatCurrency(parseFloat(String(tx.amount)), tx.currency)}
+                  <td className="px-4 py-3 text-right">
+                    <p className={`font-semibold font-mono ${typeColor[tx.type]}`}>
+                      {tx.type === 'withdrawal' ? '−' : tx.type === 'deposit' ? '+' : ''}
+                      {formatCurrency(parseFloat(String(tx.amount)), tx.currency)}
+                    </p>
+                    {tx.currency !== 'USD' && (
+                      <p className="text-[11px] text-text-muted font-mono">
+                        ≈ {formatCurrency(parseFloat(String(tx.amount_usd)), 'USD')}
+                      </p>
+                    )}
                   </td>
                   <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
                     <Button
@@ -350,8 +374,12 @@ export default function Transactions() {
                 <p className="text-sm font-medium text-text truncate">{tx.description || '—'}</p>
                 <p className="text-xs text-text-muted">
                   {formatDate(tx.date)} · {typeLabel[tx.type]}
-                  {tx.source_name && ` · ${tx.source_name}`}
-                  {tx.piggy_bank_name && ` · ${tx.piggy_bank_name}`}
+                  {tx.type === 'transfer'
+                    ? (tx.source_name || tx.destination_name) && ` · ${tx.source_name || '—'} → ${tx.destination_name || '—'}`
+                    : tx.source_name && ` · ${tx.source_name}`}
+                  {tx.type === 'transfer'
+                    ? (tx.piggy_bank_name || tx.destination_piggy_bank_name) && ` · ${tx.piggy_bank_name || '—'} → ${tx.destination_piggy_bank_name || '—'}`
+                    : tx.piggy_bank_name && ` · ${tx.piggy_bank_name}`}
                   {tx.category_name && ` · ${tx.category_name}`}
                 </p>
               </div>
@@ -360,6 +388,11 @@ export default function Transactions() {
                   {tx.type === 'withdrawal' ? '−' : tx.type === 'deposit' ? '+' : ''}
                   {formatCurrency(parseFloat(String(tx.amount)), tx.currency)}
                 </p>
+                {tx.currency !== 'USD' && (
+                  <p className="text-[11px] text-text-muted font-mono">
+                    ≈ {formatCurrency(parseFloat(String(tx.amount_usd)), 'USD')}
+                  </p>
+                )}
                 <button
                   onClick={e => { e.stopPropagation(); handleDelete(tx); }}
                   className="text-danger/60 hover:text-danger text-xs mt-0.5"

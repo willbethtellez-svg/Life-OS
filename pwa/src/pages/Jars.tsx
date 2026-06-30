@@ -3,9 +3,20 @@ import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
 import { Card, CardHeader, CardTitle, Button, Input, Select, Field } from '@/components/ui';
-import type { PiggyBank, CurrencyCode, Transaction } from '@/types';
+import type { PiggyBank, CurrencyCode, Transaction, ExchangeRate } from '@/types';
 
 const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
+
+// Convierte un monto a USD usando la tasa más cercana a la fecha dada (o la más reciente disponible)
+function toUSDClient(amount: number, currency: string, rates: ExchangeRate[], date?: string | null): number {
+  if (currency === 'USD' || currency === 'USDT') return amount;
+  let rate = date ? rates.find(r => r.date === date && r.to_currency === currency)?.rate : undefined;
+  if (!rate) {
+    rate = [...rates].filter(r => r.to_currency === currency).sort((a, b) => b.date.localeCompare(a.date))[0]?.rate;
+  }
+  if (!rate) return amount;
+  return amount / rate;
+}
 
 interface JarForm {
   name: string;
@@ -22,7 +33,7 @@ const emptyForm = (): JarForm => ({
 });
 
 export default function Jars() {
-  const { jars, addJar, updateJar } = useAppStore();
+  const { jars, addJar, updateJar, exchangeRates } = useAppStore();
   const [form, setForm] = useState<JarForm>(emptyForm());
   const [editId, setEditId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -128,23 +139,33 @@ export default function Jars() {
     setLedgerLoading(false);
   }
 
-  function getTxAmount(tx: Transaction, jarId: string): { amount: number; isIn: boolean } {
+  // El monto USD de cada movimiento viene directo de tx.amount_usd (ya calculado y
+  // persistido server-side con la tasa del día), así que es siempre el valor real
+  // del movimiento sin importar en qué moneda se registró la transacción. El monto
+  // nativo se muestra solo como referencia pequeña.
+  function getTxAmount(tx: Transaction, jarId: string): { amountUsd: number; isIn: boolean; nativeAmount: number; nativeCurrency: string } {
     const isDestJar = tx.destination_piggy_bank_id === jarId;
     const isSrcJar = tx.piggy_bank_id === jarId;
-    if (tx.type === 'deposit' && isSrcJar) return { amount: parseFloat(String(tx.amount)), isIn: true };
-    if (tx.type === 'withdrawal' && isSrcJar) return { amount: parseFloat(String(tx.amount)), isIn: false };
-    if (tx.type === 'transfer' && isSrcJar) return { amount: parseFloat(String(tx.amount)), isIn: false };
-    if (tx.type === 'transfer' && isDestJar) return { amount: parseFloat(String(tx.foreign_amount || tx.amount)), isIn: true };
-    return { amount: 0, isIn: true };
+    const amountUsd = parseFloat(String(tx.amount_usd ?? 0));
+    if (tx.type === 'deposit' && isSrcJar) return { amountUsd, isIn: true, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
+    if (tx.type === 'withdrawal' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
+    if (tx.type === 'transfer' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
+    if (tx.type === 'transfer' && isDestJar) {
+      const nativeAmount = tx.foreign_amount != null ? parseFloat(String(tx.foreign_amount)) : parseFloat(String(tx.amount));
+      const nativeCurrency = tx.foreign_currency || tx.currency;
+      return { amountUsd, isIn: true, nativeAmount, nativeCurrency };
+    }
+    return { amountUsd: 0, isIn: true, nativeAmount: 0, nativeCurrency: 'USD' };
   }
 
-  function computeRunningBalance(index: number, txList: Transaction[]): number {
+  function computeRunningBalanceUSD(index: number, txList: Transaction[]): number {
     if (!ledger) return 0;
-    const initial = parseFloat(String(ledger.initial_amount ?? 0));
+    const initialDate = ledger.start_date || ledger.created_at?.split('T')[0] || null;
+    const initial = toUSDClient(parseFloat(String(ledger.initial_amount ?? 0)), ledger.currency, exchangeRates, initialDate);
     let bal = initial;
     for (let i = 0; i <= index; i++) {
-      const { amount, isIn } = getTxAmount(txList[i], ledger.id);
-      bal += isIn ? amount : -amount;
+      const { amountUsd, isIn } = getTxAmount(txList[i], ledger.id);
+      bal += isIn ? amountUsd : -amountUsd;
     }
     return bal;
   }
@@ -158,6 +179,9 @@ export default function Jars() {
     const current = parseFloat(String(ledger.current_amount));
     const target = parseFloat(String(ledger.target_amount));
     const initial = parseFloat(String(ledger.initial_amount ?? 0));
+    const initialDate = ledger.start_date || ledger.created_at?.split('T')[0] || null;
+    const initialUsd = toUSDClient(initial, ledger.currency, exchangeRates, initialDate);
+    const currentUsd = toUSDClient(current, ledger.currency, exchangeRates, null);
     const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
 
     return (
@@ -179,6 +203,9 @@ export default function Jars() {
             <span className="text-text-muted">Ahorrado</span>
             <span className="font-semibold text-text">{formatCurrency(current, ledger.currency)} / {formatCurrency(target, ledger.currency)}</span>
           </div>
+          {ledger.currency !== 'USD' && (
+            <p className="text-xs text-text-muted text-right mb-2">≈ {formatCurrency(currentUsd, 'USD')}</p>
+          )}
           <div className="w-full h-2 bg-surface-light rounded-full overflow-hidden">
             <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
           </div>
@@ -212,7 +239,7 @@ export default function Jars() {
                   <th className="px-5 py-3 text-left">Descripción</th>
                   <th className="px-5 py-3 text-right">Entrada</th>
                   <th className="px-5 py-3 text-right">Salida</th>
-                  <th className="px-5 py-3 text-right">Saldo</th>
+                  <th className="px-5 py-3 text-right">Saldo (USD)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-light/40">
@@ -222,25 +249,39 @@ export default function Jars() {
                   <td className="px-5 py-2 text-xs text-text-muted italic">Saldo inicial</td>
                   <td className="px-5 py-2" />
                   <td className="px-5 py-2" />
-                  <td className="px-5 py-2 text-right text-xs font-mono text-text-muted">
-                    {formatCurrency(initial, ledger.currency)}
+                  <td className="px-5 py-2 text-right">
+                    <p className="text-xs font-mono text-text-muted">{formatCurrency(initialUsd, 'USD')}</p>
+                    {ledger.currency !== 'USD' && (
+                      <p className="text-[10px] text-text-muted/70 font-mono">{formatCurrency(initial, ledger.currency)}</p>
+                    )}
                   </td>
                 </tr>
                 {displayTxs.map((tx, i) => {
-                  const { amount, isIn } = getTxAmount(tx, ledger.id);
-                  const runBal = computeRunningBalance(i, displayTxs);
+                  const { amountUsd, isIn, nativeAmount, nativeCurrency } = getTxAmount(tx, ledger.id);
+                  const runBal = computeRunningBalanceUSD(i, displayTxs);
+                  const showRef = nativeCurrency !== 'USD';
                   return (
                     <tr key={tx.id} className="hover:bg-surface-elevated/50">
                       <td className="px-5 py-3 text-text-muted">{formatDate(tx.date)}</td>
                       <td className="px-5 py-3 text-text">{tx.description || '—'}</td>
                       <td className="px-5 py-3 text-right font-mono text-secondary">
-                        {isIn ? formatCurrency(amount, ledger.currency) : ''}
+                        {isIn && (
+                          <>
+                            <p>{formatCurrency(amountUsd, 'USD')}</p>
+                            {showRef && <p className="text-[10px] text-secondary/70">{formatCurrency(nativeAmount, nativeCurrency)}</p>}
+                          </>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-right font-mono text-danger">
-                        {!isIn ? formatCurrency(amount, ledger.currency) : ''}
+                        {!isIn && (
+                          <>
+                            <p>{formatCurrency(amountUsd, 'USD')}</p>
+                            {showRef && <p className="text-[10px] text-danger/70">{formatCurrency(nativeAmount, nativeCurrency)}</p>}
+                          </>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-right font-mono text-text">
-                        {formatCurrency(runBal, ledger.currency)}
+                        {formatCurrency(runBal, 'USD')}
                       </td>
                     </tr>
                   );
@@ -256,14 +297,20 @@ export default function Jars() {
           <Card padding="sm" className="bg-surface-elevated/40">
             <div className="flex items-center justify-between">
               <p className="text-xs text-text-muted italic">Saldo inicial</p>
-              <p className="text-xs font-mono text-text-muted">{formatCurrency(initial, ledger.currency)}</p>
+              <div className="text-right">
+                <p className="text-xs font-mono text-text-muted">{formatCurrency(initialUsd, 'USD')}</p>
+                {ledger.currency !== 'USD' && (
+                  <p className="text-[10px] text-text-muted/70 font-mono">{formatCurrency(initial, ledger.currency)}</p>
+                )}
+              </div>
             </div>
           </Card>
           {ledgerLoading ? (
             <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
           ) : displayTxs.map((tx, i) => {
-            const { amount, isIn } = getTxAmount(tx, ledger.id);
-            const runBal = computeRunningBalance(i, displayTxs);
+            const { amountUsd, isIn, nativeAmount, nativeCurrency } = getTxAmount(tx, ledger.id);
+            const runBal = computeRunningBalanceUSD(i, displayTxs);
+            const showRef = nativeCurrency !== 'USD';
             return (
               <Card key={tx.id} padding="sm">
                 <div className="flex items-center justify-between">
@@ -273,9 +320,14 @@ export default function Jars() {
                   </div>
                   <div className="text-right">
                     <p className={`text-sm font-semibold ${isIn ? 'text-secondary' : 'text-danger'}`}>
-                      {isIn ? '+' : '−'}{formatCurrency(amount, ledger.currency)}
+                      {isIn ? '+' : '−'}{formatCurrency(amountUsd, 'USD')}
                     </p>
-                    <p className="text-xs text-text-muted font-mono">{formatCurrency(runBal, ledger.currency)}</p>
+                    {showRef && (
+                      <p className={`text-[10px] ${isIn ? 'text-secondary/70' : 'text-danger/70'}`}>
+                        {formatCurrency(nativeAmount, nativeCurrency)}
+                      </p>
+                    )}
+                    <p className="text-xs text-text-muted font-mono">{formatCurrency(runBal, 'USD')}</p>
                   </div>
                 </div>
               </Card>
