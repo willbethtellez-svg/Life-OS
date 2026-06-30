@@ -132,6 +132,15 @@ export default function Transactions() {
   // ── Submit ────────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (form.type === 'transfer') {
+      const destAcc = accounts.find(a => a.id === form.destAccountId);
+      if (destAcc && destAcc.currency !== form.currency && !form.foreignAmount) {
+        setError(`Indica el monto recibido en ${destAcc.currency} para esta transferencia entre monedas distintas.`);
+        return;
+      }
+    }
+
     setSaving(true);
     setError('');
 
@@ -248,6 +257,18 @@ export default function Transactions() {
   const showDest = form.type === 'deposit' || form.type === 'transfer';
   const jarLabel = form.type === 'deposit' ? 'Jarra (destino ingreso)' : form.type === 'withdrawal' ? 'Jarra (origen gasto)' : 'Jarra origen';
   const activeLoans = liabilities.filter(l => !l.archived);
+
+  const destAccount = accounts.find(a => a.id === form.destAccountId);
+  const needsForeignAmount = form.type === 'transfer' && !!destAccount && destAccount.currency !== form.currency;
+
+  function selectDestAccount(id: string) {
+    const acc = accounts.find(a => a.id === id);
+    setForm(prev => ({
+      ...prev,
+      destAccountId: id,
+      foreignCurrency: acc ? acc.currency : prev.foreignCurrency,
+    }));
+  }
 
   return (
     <div className="p-4 lg:p-6 max-w-5xl mx-auto space-y-5">
@@ -486,7 +507,10 @@ export default function Transactions() {
 
               {showDest && (
                 <Field label="Cuenta destino">
-                  <Select value={form.destAccountId} onChange={e => f('destAccountId', e.target.value)}>
+                  <Select
+                    value={form.destAccountId}
+                    onChange={e => form.type === 'transfer' ? selectDestAccount(e.target.value) : f('destAccountId', e.target.value)}
+                  >
                     <option value="">— Sin cuenta —</option>
                     {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
                   </Select>
@@ -495,15 +519,26 @@ export default function Transactions() {
 
               {form.type === 'transfer' && (
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Monto destino (si diferente)">
-                    <Input type="number" step="any" min="0" value={form.foreignAmount} onChange={e => f('foreignAmount', e.target.value)} placeholder="0.00" />
+                  <Field label={needsForeignAmount ? `Monto recibido (${form.foreignCurrency})` : 'Monto destino (si diferente)'}>
+                    <Input
+                      type="number" step="any" min="0"
+                      value={form.foreignAmount}
+                      onChange={e => f('foreignAmount', e.target.value)}
+                      placeholder="0.00"
+                      required={needsForeignAmount}
+                    />
                   </Field>
                   <Field label="Moneda destino">
-                    <Select value={form.foreignCurrency} onChange={e => f('foreignCurrency', e.target.value)}>
+                    <Select value={form.foreignCurrency} onChange={e => f('foreignCurrency', e.target.value)} disabled={!!destAccount}>
                       {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                     </Select>
                   </Field>
                 </div>
+              )}
+              {needsForeignAmount && !form.foreignAmount && (
+                <p className="text-xs text-warning -mt-2">
+                  Las cuentas son de monedas distintas — indica cuánto se recibió en {form.foreignCurrency} para calcular la tasa del día correctamente.
+                </p>
               )}
 
               <Field label="Categoría">
