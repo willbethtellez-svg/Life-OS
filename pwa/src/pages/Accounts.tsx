@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
@@ -7,6 +7,57 @@ import type { Account, CurrencyCode, Transaction } from '@/types';
 
 const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
 const ACC_TYPES = [{ value: 'asset', label: 'Activo' }, { value: 'liability', label: 'Pasivo' }];
+
+const typeLabelEs: Record<string, string> = { withdrawal: 'gasto', deposit: 'ingreso', transfer: 'transferencia' };
+
+// Una sola fuente de verdad para el saldo: arranca en initial_balance y
+// recorre los movimientos reales. La comisión de cada transacción se modela
+// como un renglón aparte ("Comisión de ...") que sale de la cuenta que
+// originó el movimiento, en vez de mezclarse silenciosamente en el monto.
+interface LedgerEntry {
+  key: string;
+  date: string;
+  description: string;
+  amount: number;
+  isDebit: boolean;
+  isFee: boolean;
+}
+
+function buildAccountEntries(accountId: string, txs: Transaction[]): LedgerEntry[] {
+  const entries: LedgerEntry[] = [];
+  for (const tx of txs) {
+    const isSource = tx.source_account_id === accountId;
+    const isDest = tx.destination_account_id === accountId;
+    if (isSource) {
+      entries.push({ key: tx.id, date: tx.date, description: tx.description, amount: parseFloat(String(tx.amount)), isDebit: true, isFee: false });
+    } else if (isDest) {
+      const amt = parseFloat(String(tx.foreign_amount ?? tx.amount));
+      entries.push({ key: tx.id, date: tx.date, description: tx.description, amount: amt, isDebit: false, isFee: false });
+    }
+    const fee = parseFloat(String(tx.fee || 0));
+    if (fee > 0) {
+      const feeAccountId = tx.source_account_id || tx.destination_account_id;
+      if (feeAccountId === accountId) {
+        entries.push({
+          key: `${tx.id}-fee`,
+          date: tx.date,
+          description: `Comisión de "${tx.description || typeLabelEs[tx.type] || tx.type}"`,
+          amount: fee,
+          isDebit: true,
+          isFee: true,
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+function computeFinalBalance(account: Account, txs: Transaction[]): number {
+  const entries = buildAccountEntries(account.id, txs);
+  let bal = parseFloat(String(account.initial_balance));
+  for (const e of entries) bal += e.isDebit ? -e.amount : e.amount;
+  return bal;
+}
 
 interface AccForm {
   name: string;
@@ -28,6 +79,10 @@ export default function Accounts() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Saldos calculados en vivo desde los movimientos reales — la misma función
+  // que alimenta el libro contable, para que nunca haya dos cifras distintas.
+  const [balances, setBalances] = useState<Record<string, number>>({});
+
   // Ledger state
   const [ledger, setLedger] = useState<Account | null>(null);
   const [txHistory, setTxHistory] = useState<Transaction[]>([]);
@@ -35,6 +90,22 @@ export default function Accounts() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
+
+  // Se recalcula cada vez que `accounts` cambia de referencia — lo cual ya
+  // ocurre tras cada mutación y tras cada refresh automático del store
+  // (navegación, regreso de background), así que los saldos quedan al día
+  // sin lógica adicional de invalidación.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(accounts.map(async (acc) => {
+        const txs = await db.accounts.transactions(acc.id);
+        return [acc.id, computeFinalBalance(acc, txs)] as const;
+      }));
+      if (!cancelled) setBalances(Object.fromEntries(entries));
+    })();
+    return () => { cancelled = true; };
+  }, [accounts]);
 
   function openForm(acc?: Account) {
     if (acc) {
@@ -111,7 +182,7 @@ export default function Accounts() {
     setFilterStart('');
     setFilterEnd('');
     setSortOrder('asc');
-    const txs = await db.accounts.transactions(acc.id, { limit: 200 });
+    const txs = await db.accounts.transactions(acc.id);
     setTxHistory(txs);
     setLedgerLoading(false);
   }
@@ -120,7 +191,6 @@ export default function Accounts() {
     if (!ledger) return;
     setLedgerLoading(true);
     const txs = await db.accounts.transactions(ledger.id, {
-      limit: 200,
       start: filterStart || undefined,
       end: filterEnd || undefined,
     });
@@ -128,26 +198,21 @@ export default function Accounts() {
     setLedgerLoading(false);
   }
 
-  function computeRunningBalance(index: number, txList: Transaction[]): number {
-    if (!ledger) return 0;
-    const initial = parseFloat(String(ledger.initial_balance));
-    let bal = initial;
-    for (let i = 0; i <= index; i++) {
-      const tx = txList[i];
-      if (tx.source_account_id === ledger.id) bal -= parseFloat(String(tx.amount));
-      else if (tx.destination_account_id === ledger.id) {
-        bal += parseFloat(String(tx.foreign_amount ?? tx.amount));
-      }
-    }
-    return bal;
-  }
-
-  const displayTxs = [...txHistory].sort((a, b) =>
-    sortOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
-  );
+  const displayEntries = ledger ? (() => {
+    const sorted = [...txHistory].sort((a, b) =>
+      sortOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
+    );
+    const entries = buildAccountEntries(ledger.id, sorted);
+    let bal = parseFloat(String(ledger.initial_balance));
+    return entries.map(e => {
+      bal += e.isDebit ? -e.amount : e.amount;
+      return { ...e, runningBalance: bal };
+    });
+  })() : [];
 
   // Ledger view
   if (ledger) {
+    const headerBalance = balances[ledger.id] ?? parseFloat(String(ledger.current_balance));
     return (
       <div className="p-4 lg:p-6 max-w-4xl mx-auto space-y-4">
         <div className="flex items-center gap-3">
@@ -159,7 +224,7 @@ export default function Accounts() {
             <p className="text-xs text-text-muted">{ledger.currency} · Libro contable</p>
           </div>
           <span className="text-lg font-bold text-text">
-            {formatCurrency(parseFloat(String(ledger.current_balance)), ledger.currency)}
+            {formatCurrency(headerBalance, ledger.currency)}
           </span>
         </div>
 
@@ -204,26 +269,21 @@ export default function Accounts() {
                     {formatCurrency(parseFloat(String(ledger.initial_balance)), ledger.currency)}
                   </td>
                 </tr>
-                {displayTxs.map((tx, i) => {
-                  const isDebit = tx.source_account_id === ledger.id;
-                  const amt = parseFloat(String(isDebit ? tx.amount : (tx.foreign_amount ?? tx.amount)));
-                  const runBal = computeRunningBalance(i, displayTxs);
-                  return (
-                    <tr key={tx.id} className="hover:bg-surface-elevated/50">
-                      <td className="px-5 py-3 text-text-muted">{formatDate(tx.date)}</td>
-                      <td className="px-5 py-3 text-text">{tx.description || '—'}</td>
-                      <td className="px-5 py-3 text-right font-mono text-danger">
-                        {isDebit ? formatCurrency(amt, ledger.currency) : ''}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono text-secondary">
-                        {!isDebit ? formatCurrency(amt, ledger.currency) : ''}
-                      </td>
-                      <td className="px-5 py-3 text-right font-mono text-text">
-                        {formatCurrency(runBal, ledger.currency)}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {displayEntries.map(e => (
+                  <tr key={e.key} className={`hover:bg-surface-elevated/50 ${e.isFee ? 'opacity-70' : ''}`}>
+                    <td className="px-5 py-3 text-text-muted">{formatDate(e.date)}</td>
+                    <td className="px-5 py-3 text-text">{e.description || '—'}</td>
+                    <td className="px-5 py-3 text-right font-mono text-danger">
+                      {e.isDebit ? formatCurrency(e.amount, ledger.currency) : ''}
+                    </td>
+                    <td className="px-5 py-3 text-right font-mono text-secondary">
+                      {!e.isDebit ? formatCurrency(e.amount, ledger.currency) : ''}
+                    </td>
+                    <td className="px-5 py-3 text-right font-mono text-text">
+                      {formatCurrency(e.runningBalance, ledger.currency)}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
@@ -233,27 +293,22 @@ export default function Accounts() {
         <div className="sm:hidden space-y-2">
           {ledgerLoading ? (
             <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
-          ) : displayTxs.map((tx, i) => {
-            const isDebit = tx.source_account_id === ledger.id;
-            const amt = parseFloat(String(isDebit ? tx.amount : (tx.foreign_amount || tx.amount)));
-            const runBal = computeRunningBalance(i, displayTxs);
-            return (
-              <Card key={tx.id} padding="sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-text">{tx.description || '—'}</p>
-                    <p className="text-xs text-text-muted">{formatDate(tx.date)}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className={`text-sm font-semibold ${isDebit ? 'text-danger' : 'text-secondary'}`}>
-                      {isDebit ? '−' : '+'}{formatCurrency(amt, ledger.currency)}
-                    </p>
-                    <p className="text-xs text-text-muted font-mono">{formatCurrency(runBal, ledger.currency)}</p>
-                  </div>
+          ) : displayEntries.map(e => (
+            <Card key={e.key} padding="sm" className={e.isFee ? 'opacity-70' : ''}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-text">{e.description || '—'}</p>
+                  <p className="text-xs text-text-muted">{formatDate(e.date)}</p>
                 </div>
-              </Card>
-            );
-          })}
+                <div className="text-right">
+                  <p className={`text-sm font-semibold ${e.isDebit ? 'text-danger' : 'text-secondary'}`}>
+                    {e.isDebit ? '−' : '+'}{formatCurrency(e.amount, ledger.currency)}
+                  </p>
+                  <p className="text-xs text-text-muted font-mono">{formatCurrency(e.runningBalance, ledger.currency)}</p>
+                </div>
+              </div>
+            </Card>
+          ))}
         </div>
       </div>
     );
@@ -292,7 +347,7 @@ export default function Accounts() {
               </div>
             </div>
             <p className={`text-xl font-bold ${acc.type === 'liability' ? 'text-danger' : 'text-text'}`}>
-              {formatCurrency(parseFloat(String(acc.current_balance)), acc.currency)}
+              {formatCurrency(balances[acc.id] ?? parseFloat(String(acc.current_balance)), acc.currency)}
             </p>
             {!acc.include_in_net_worth && (
               <Badge variant="warning" className="mt-2 text-xs">Excluida del patrimonio</Badge>

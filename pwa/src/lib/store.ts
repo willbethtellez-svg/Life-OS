@@ -38,6 +38,11 @@ interface AppStore {
   addOrUpdateRate: (r: ExchangeRate) => void;
 }
 
+// Reused so concurrent refresh() callers (nav change + visibility regain +
+// post-mutation sync firing close together) share one in-flight fetch instead
+// of triggering duplicate query bursts.
+let refreshInFlight: Promise<void> | null = null;
+
 export const useAppStore = create<AppStore>((set, get) => ({
   accounts: [],
   categories: [],
@@ -59,14 +64,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   refresh: async () => {
-    const [accounts, categories, jars, liabilities, exchangeRates] = await Promise.all([
-      db.accounts.list(),
-      db.categories.list(),
-      db.piggyBanks.list(),
-      db.liabilities.list(),
-      db.exchangeRates.getAll(),
-    ]);
-    set({ accounts, categories, jars, liabilities, exchangeRates });
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async () => {
+      const [accounts, categories, jars, liabilities, exchangeRates] = await Promise.all([
+        db.accounts.list(),
+        db.categories.list(),
+        db.piggyBanks.list(),
+        db.liabilities.list(),
+        db.exchangeRates.getAll(),
+      ]);
+      set({ accounts, categories, jars, liabilities, exchangeRates });
+    })();
+    try {
+      await refreshInFlight;
+    } finally {
+      refreshInFlight = null;
+    }
   },
 
   // ── Accounts ──────────────────────────────────────────────

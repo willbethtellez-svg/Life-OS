@@ -47,7 +47,7 @@ const typeBg: Record<TransactionType, string> = {
 };
 
 export default function Transactions() {
-  const { accounts, categories, jars, liabilities, setRates } = useAppStore();
+  const { accounts, categories, jars, liabilities, setRates, refresh } = useAppStore();
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -173,6 +173,7 @@ export default function Transactions() {
         const real = await db.transactions.update(editTx.id, payload);
         setTxs(prev => prev.map(t => t.id === editTx.id ? enrichFromStore(real) : t));
         if (isCrossCurrencyTransfer(editTx) || isCrossCurrencyTransfer(payload)) await syncRates();
+        void refresh(); // re-sync account/jar balances changed by the update RPCs
       } catch {
         setTxs(prev => prev.map(t => t.id === editTx.id ? editTx : t));
         setError('Error al actualizar la transacción');
@@ -203,6 +204,7 @@ export default function Transactions() {
       const real = await db.transactions.create(payload);
       setTxs(prev => prev.map(t => t.id === tempId ? enrichFromStore(real) : t));
       if (isCrossCurrencyTransfer(payload)) await syncRates();
+      void refresh(); // re-sync account/jar balances changed by the create RPCs
 
       // Vincular a préstamo:
       // gasto → suma a la deuda (increase), ingreso → paga la deuda (payment)
@@ -217,6 +219,7 @@ export default function Transactions() {
           notes: form.description || '',
           transaction_id: real.id,
         });
+        void refresh(); // re-sync the liability balance touched by the movement
       }
     } catch {
       setTxs(prev => prev.filter(t => t.id !== tempId));
@@ -232,6 +235,7 @@ export default function Transactions() {
     try {
       await db.transactions.delete(tx.id);
       if (isCrossCurrencyTransfer(tx)) await syncRates();
+      void refresh(); // re-sync account/jar balances reversed by the delete RPCs
     } catch {
       setTxs(prev => [tx, ...prev].sort((a, b) => b.date.localeCompare(a.date)));
       setError('Error al eliminar');

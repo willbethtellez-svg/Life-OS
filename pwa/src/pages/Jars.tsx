@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
@@ -16,6 +16,50 @@ function toUSDClient(amount: number, currency: string, rates: ExchangeRate[], da
   }
   if (!rate) return amount;
   return amount / rate;
+}
+
+// Convierte un monto en USD a otra moneda usando la tasa más cercana a la fecha dada
+function usdToCurrencyClient(amountUsd: number, currency: string, rates: ExchangeRate[], date?: string | null): number {
+  if (currency === 'USD' || currency === 'USDT') return amountUsd;
+  let rate = date ? rates.find(r => r.date === date && r.to_currency === currency)?.rate : undefined;
+  if (!rate) {
+    rate = [...rates].filter(r => r.to_currency === currency).sort((a, b) => b.date.localeCompare(a.date))[0]?.rate;
+  }
+  if (!rate) return amountUsd;
+  return amountUsd * rate;
+}
+
+// El monto USD de cada movimiento viene directo de tx.amount_usd (ya calculado y
+// persistido server-side con la tasa del día), así que es siempre el valor real
+// del movimiento sin importar en qué moneda se registró la transacción. El monto
+// nativo se muestra solo como referencia pequeña en el libro contable.
+function getTxAmount(tx: Transaction, jarId: string): { amountUsd: number; isIn: boolean; nativeAmount: number; nativeCurrency: string } {
+  const isDestJar = tx.destination_piggy_bank_id === jarId;
+  const isSrcJar = tx.piggy_bank_id === jarId;
+  const amountUsd = parseFloat(String(tx.amount_usd ?? 0));
+  if (tx.type === 'deposit' && isSrcJar) return { amountUsd, isIn: true, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
+  if (tx.type === 'withdrawal' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
+  if (tx.type === 'transfer' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
+  if (tx.type === 'transfer' && isDestJar) {
+    const nativeAmount = tx.foreign_amount != null ? parseFloat(String(tx.foreign_amount)) : parseFloat(String(tx.amount));
+    const nativeCurrency = tx.foreign_currency || tx.currency;
+    return { amountUsd, isIn: true, nativeAmount, nativeCurrency };
+  }
+  return { amountUsd: 0, isIn: true, nativeAmount: 0, nativeCurrency: 'USD' };
+}
+
+// Saldo en la moneda propia de la jarra: arranca en initial_amount (ya está en
+// la moneda de la jarra) y convierte cada movimiento (vía su amount_usd, el
+// valor ya calculado server-side) a esa misma moneda — la misma fuente que
+// alimenta el libro contable, para que nunca haya dos cifras distintas.
+function computeJarFinalBalance(jar: PiggyBank, txs: Transaction[], rates: ExchangeRate[]): number {
+  let bal = parseFloat(String(jar.initial_amount ?? 0));
+  for (const tx of txs) {
+    const { amountUsd, isIn } = getTxAmount(tx, jar.id);
+    const native = usdToCurrencyClient(amountUsd, jar.currency, rates, tx.date);
+    bal += isIn ? native : -native;
+  }
+  return bal;
 }
 
 interface JarForm {
@@ -39,6 +83,22 @@ export default function Jars() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Saldos (en moneda propia de cada jarra) calculados en vivo desde los
+  // movimientos reales — la misma función que alimenta el libro contable.
+  const [balances, setBalances] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(jars.map(async (jar) => {
+        const txs = await db.piggyBanks.transactions(jar.id);
+        return [jar.id, computeJarFinalBalance(jar, txs, exchangeRates)] as const;
+      }));
+      if (!cancelled) setBalances(Object.fromEntries(entries));
+    })();
+    return () => { cancelled = true; };
+  }, [jars, exchangeRates]);
 
   // Ledger state
   const [ledger, setLedger] = useState<PiggyBank | null>(null);
@@ -139,25 +199,6 @@ export default function Jars() {
     setLedgerLoading(false);
   }
 
-  // El monto USD de cada movimiento viene directo de tx.amount_usd (ya calculado y
-  // persistido server-side con la tasa del día), así que es siempre el valor real
-  // del movimiento sin importar en qué moneda se registró la transacción. El monto
-  // nativo se muestra solo como referencia pequeña.
-  function getTxAmount(tx: Transaction, jarId: string): { amountUsd: number; isIn: boolean; nativeAmount: number; nativeCurrency: string } {
-    const isDestJar = tx.destination_piggy_bank_id === jarId;
-    const isSrcJar = tx.piggy_bank_id === jarId;
-    const amountUsd = parseFloat(String(tx.amount_usd ?? 0));
-    if (tx.type === 'deposit' && isSrcJar) return { amountUsd, isIn: true, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
-    if (tx.type === 'withdrawal' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
-    if (tx.type === 'transfer' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
-    if (tx.type === 'transfer' && isDestJar) {
-      const nativeAmount = tx.foreign_amount != null ? parseFloat(String(tx.foreign_amount)) : parseFloat(String(tx.amount));
-      const nativeCurrency = tx.foreign_currency || tx.currency;
-      return { amountUsd, isIn: true, nativeAmount, nativeCurrency };
-    }
-    return { amountUsd: 0, isIn: true, nativeAmount: 0, nativeCurrency: 'USD' };
-  }
-
   function computeRunningBalanceUSD(index: number, txList: Transaction[]): number {
     if (!ledger) return 0;
     const initialDate = ledger.start_date || ledger.created_at?.split('T')[0] || null;
@@ -176,7 +217,7 @@ export default function Jars() {
 
   // ── Ledger view ──────────────────────────────────────────────
   if (ledger) {
-    const current = parseFloat(String(ledger.current_amount));
+    const current = balances[ledger.id] ?? parseFloat(String(ledger.current_amount));
     const target = parseFloat(String(ledger.target_amount));
     const initial = parseFloat(String(ledger.initial_amount ?? 0));
     const initialDate = ledger.start_date || ledger.created_at?.split('T')[0] || null;
@@ -355,7 +396,7 @@ export default function Jars() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {jars.map(jar => {
-          const current = parseFloat(String(jar.current_amount));
+          const current = balances[jar.id] ?? parseFloat(String(jar.current_amount));
           const target = parseFloat(String(jar.target_amount));
           const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
           return (
