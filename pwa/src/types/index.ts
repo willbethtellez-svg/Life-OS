@@ -1,93 +1,128 @@
+export type TransactionType = 'withdrawal' | 'deposit' | 'transfer';
+export type CurrencyCode = 'USD' | 'VES' | 'EUR' | 'BTC' | 'USDT';
+
 export interface Account {
   id: string;
+  user_id: string;
   name: string;
-  type: 'asset' | 'liability' | 'revenue' | 'expense';
+  type: 'asset' | 'liability';
   currency: CurrencyCode;
-  balance: number;
-  balanceFormatted: string;
-  initialBalance: number;
-  currentBalance: number;
+  initial_balance: number;
+  current_balance: number;
+  include_in_net_worth: boolean;
   active: boolean;
-  virtualBalance: number;
-  includeInNetWorth: boolean;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Transaction {
   id: string;
+  user_id: string;
   date: string;
   description: string;
   amount: number;
-  amountFormatted: string;
-  foreignAmount: number | null;
-  foreignCurrency: CurrencyCode | null;
+  currency: CurrencyCode;
+  amount_usd: number;
   type: TransactionType;
-  sourceId: string;
-  sourceName: string;
-  destinationId: string;
-  destinationName: string;
-  categoryId: string | null;
-  categoryName: string | null;
-  budgetId: string | null;
-  piggyBankId: string | null;
-  tags: string[];
+  source_account_id: string | null;
+  destination_account_id: string | null;
+  category_id: string | null;
+  piggy_bank_id: string | null;
+  destination_piggy_bank_id: string | null;
+  foreign_amount: number | null;
+  foreign_currency: CurrencyCode | null;
+  fee: number;
+  fee_currency: CurrencyCode | null;
+  confirmed: boolean;
   reconciled: boolean;
-  pending: boolean;
   notes: string;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  // Joined fields
+  category_name?: string | null;
+  source_name?: string | null;
+  destination_name?: string | null;
+  piggy_bank_name?: string | null;
+  destination_piggy_bank_name?: string | null;
 }
-
-export type TransactionType = 'withdrawal' | 'deposit' | 'transfer';
-
-export type CurrencyCode = 'USD' | 'VES' | 'EUR' | 'BTC' | 'USDT';
 
 export interface Category {
   id: string;
+  user_id: string;
   name: string;
-  spent: number;
-  budgeted: number;
+  created_at: string;
 }
 
 export interface Budget {
   id: string;
+  user_id: string;
   name: string;
-  active: boolean;
-  budgetLimit: number;
-  spent: number;
   currency: CurrencyCode;
+  budget_limit: number;
+  active: boolean;
+  created_at: string;
 }
 
 export interface PiggyBank {
   id: string;
+  user_id: string;
   name: string;
-  targetAmount: number;
-  currentAmount: number;
+  target_amount: number;
+  current_amount: number;
   currency: CurrencyCode;
-  startDate: string;
-  targetDate: string | null;
+  start_date: string | null;
+  target_date: string | null;
   notes: string;
+  created_at: string;
 }
 
 export interface Liability {
   id: string;
+  user_id: string;
   name: string;
   type: 'loan' | 'debt' | 'credit';
   amount: number;
-  interestRate: number;
+  current_balance: number;
+  interest_rate: number;
   currency: CurrencyCode;
-  startDate: string;
-  dueDate: string | null;
+  start_date: string | null;
+  due_date: string | null;
+  archived: boolean;
+  paid_date: string | null;
+  created_at: string;
+}
+
+export interface LiabilityMovement {
+  id: string;
+  user_id: string;
+  liability_id: string;
+  date: string;
+  type: 'initial' | 'payment' | 'increase' | 'interest';
+  amount: number;
+  currency: string;
+  notes: string;
+  transaction_id: string | null;
+  created_at: string;
 }
 
 export interface ExchangeRate {
+  id: string;
+  user_id: string;
   date: string;
-  from: CurrencyCode;
-  to: CurrencyCode;
+  from_currency: string;
+  to_currency: string;
   rate: number;
   source: 'official' | 'p2p_average' | 'manual';
-  transactionsUsed: number;
+  transactions_used: number;
+  created_at: string;
+}
+
+export interface AccountAcquisition {
+  id: string;
+  user_id: string;
+  account_id: string;
+  average_rate: number;
+  notes: string;
+  updated_at: string;
 }
 
 export interface PendingTransaction {
@@ -98,9 +133,17 @@ export interface PendingTransaction {
   currency: CurrencyCode;
   accountId: string;
   accountName: string;
+  destinationAccountId?: string;
+  destinationAccountName?: string;
   type: TransactionType;
   categoryId: string | null;
   categoryName: string | null;
+  piggyBankId?: string | null;
+  piggyBankName?: string;
+  destinationPiggyBankId?: string | null;
+  destinationPiggyBankName?: string;
+  foreignAmount?: number | null;
+  foreignCurrency?: CurrencyCode | null;
   fee: number | null;
   feeCurrency: CurrencyCode | null;
   feeCategoryId: string | null;
@@ -111,52 +154,57 @@ export interface PendingTransaction {
 
 export interface HouseholdTask {
   id: string;
+  user_id: string;
   title: string;
   description: string;
   date: string;
   completed: boolean;
-  estimatedCost: number;
+  estimated_cost: number;
   currency: CurrencyCode;
-  jarId: string | null;
-  jarName: string | null;
   category: 'mantenimiento' | 'limpieza' | 'reparacion' | 'compra' | 'otro';
   notes: string;
-  createdAt: string;
+  created_at: string;
 }
 
 export interface MaintenanceLog {
   id: string;
+  user_id: string;
   date: string;
   type: string;
   description: string;
   cost: number;
   currency: CurrencyCode;
-  nextDate: string | null;
+  next_date: string | null;
   notes: string;
+  created_at: string;
 }
 
 export interface VehicleRecord {
   id: string;
+  user_id: string;
   date: string;
   type: 'fuel' | 'maintenance' | 'repair' | 'insurance' | 'other';
   description: string;
   mileage: number;
   cost: number;
   currency: CurrencyCode;
-  nextMileage: number | null;
-  nextDate: string | null;
+  next_mileage: number | null;
+  next_date: string | null;
   notes: string;
-  transactionId: string | null;
+  transaction_id: string | null;
+  created_at: string;
 }
 
 export interface BabyRecord {
   id: string;
+  user_id: string;
   date: string;
   type: 'appointment' | 'purchase' | 'milestone' | 'expense' | 'other';
   description: string;
   cost: number;
   currency: CurrencyCode;
-  estimatedCost: number;
+  estimated_cost: number;
   notes: string;
   completed: boolean;
+  created_at: string;
 }

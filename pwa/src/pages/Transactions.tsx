@@ -58,25 +58,29 @@ export default function TransactionsPage() {
     date: new Date().toISOString().split('T')[0],
   });
 
+  const [loanId, setLoanId] = useState('');
   const [accounts, setAccounts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [jars, setJars] = useState<any[]>([]);
+  const [liabilities, setLiabilities] = useState<any[]>([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [txList, accList, catList, pendingList, jarList] = await Promise.all([
+      const [txList, accList, catList, pendingList, jarList, liabList] = await Promise.all([
         db.transactions.list({ limit: 100 }),
         db.accounts.list({ type: 'asset' }),
         db.categories.list(),
         db.pendingTransactions.getAll(),
         db.piggyBanks.list(),
+        db.liabilities.list(),
       ]);
       setTransactions(txList);
       setAccounts(accList);
       setCategories(catList);
       setPending(pendingList);
       setJars(jarList);
+      setLiabilities(liabList);
     } catch (err) {
       setError('Error al cargar transacciones');
       console.error(err);
@@ -112,6 +116,7 @@ export default function TransactionsPage() {
     });
     setShowFee(false);
     setEditingTx(null);
+    setLoanId('');
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -146,7 +151,7 @@ export default function TransactionsPage() {
       source_account_id: form.type === 'deposit' ? null : form.accountId,
       destination_account_id: form.type === 'withdrawal' ? null : (form.destinationAccountId || form.accountId),
       category_id: form.type === 'transfer' ? null : (form.categoryId || null),
-      piggy_bank_id: form.type === 'withdrawal' || form.type === 'transfer' ? (form.piggyBankId || null) : null,
+      piggy_bank_id: form.piggyBankId || null,
       destination_piggy_bank_id: form.type === 'transfer' ? (form.destinationPiggyBankId || null) : null,
       foreign_amount: foreignAmount,
       foreign_currency: foreignAmount ? form.foreignCurrency : null,
@@ -192,6 +197,20 @@ export default function TransactionsPage() {
             });
           }
         }
+      }
+
+      // Link to loan if selected (only on create)
+      if (!editingTx && loanId) {
+        const movType = form.type === 'deposit' ? 'increase' : 'payment';
+        await db.liabilities.addMovement({
+          liability_id: loanId,
+          date: form.date,
+          type: movType,
+          amount,
+          currency: form.currency,
+          notes: form.description,
+          transaction_id: null,
+        });
       }
 
       resetForm();
@@ -444,28 +463,48 @@ export default function TransactionsPage() {
           )}
 
           {/* Jars */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {(form.type === 'withdrawal' || form.type === 'transfer') && jars.length > 0 && (
+          {jars.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-text-muted mb-1">Jarra (origen)</label>
+                <label className="block text-xs text-text-muted mb-1">
+                  {form.type === 'deposit' ? 'Jarra (ingreso va a...)' : form.type === 'transfer' ? 'Jarra origen' : 'Jarra (gasto sale de...)'}
+                </label>
                 <select value={form.piggyBankId} onChange={e => setForm(f => ({ ...f, piggyBankId: e.target.value }))}
                   className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
                   <option value="">Sin jarra</option>
                   {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
                 </select>
               </div>
-            )}
-            {form.type === 'transfer' && jars.length > 0 && (
-              <div>
-                <label className="block text-xs text-text-muted mb-1">Jarra (destino)</label>
-                <select value={form.destinationPiggyBankId} onChange={e => setForm(f => ({ ...f, destinationPiggyBankId: e.target.value }))}
-                  className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                  <option value="">Sin jarra</option>
-                  {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
-                </select>
-              </div>
-            )}
-          </div>
+              {form.type === 'transfer' && (
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Jarra destino</label>
+                  <select value={form.destinationPiggyBankId} onChange={e => setForm(f => ({ ...f, destinationPiggyBankId: e.target.value }))}
+                    className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
+                    <option value="">Sin jarra</option>
+                    {jars.map((j: any) => <option key={j.id} value={j.id}>{j.name} ({formatCurrency(j.current_amount || 0, j.currency)})</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Loan link */}
+          {!editingTx && liabilities.length > 0 && form.type !== 'transfer' && (
+            <div>
+              <label className="block text-xs text-text-muted mb-1">
+                {form.type === 'deposit' ? '¿Es préstamo recibido? (vincula a deuda)' : '¿Es pago de préstamo?'}
+              </label>
+              <select value={loanId} onChange={e => setLoanId(e.target.value)}
+                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
+                <option value="">No vincular a préstamo</option>
+                {liabilities.map((l: any) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name} — {formatCurrency(parseFloat(l.current_balance || '0'), l.currency)} pendiente
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Fee toggle */}
           {form.type !== 'transfer' && (
