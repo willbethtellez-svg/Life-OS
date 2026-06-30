@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
-import { Card, CardHeader, CardTitle, Button, Input, Select, Field, Badge } from '@/components/ui';
+import { Card, Button, Input, Select, Field } from '@/components/ui';
 import type { Transaction, CurrencyCode, TransactionType } from '@/types';
 
 const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
@@ -41,7 +41,9 @@ const typeColor: Record<TransactionType, string> = {
   withdrawal: 'text-danger', deposit: 'text-secondary', transfer: 'text-transfer',
 };
 const typeBg: Record<TransactionType, string> = {
-  withdrawal: 'bg-danger/10 text-danger', deposit: 'bg-secondary/10 text-secondary', transfer: 'bg-transfer/10 text-transfer',
+  withdrawal: 'bg-danger/10 text-danger',
+  deposit: 'bg-secondary/10 text-secondary',
+  transfer: 'bg-transfer/10 text-transfer',
 };
 
 export default function Transactions() {
@@ -49,10 +51,11 @@ export default function Transactions() {
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editTx, setEditTx] = useState<Transaction | null>(null);
   const [form, setForm] = useState<TxForm>(emptyForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [filterType, setFilterType] = useState<string>('');
+  const [filterType, setFilterType] = useState('');
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
 
@@ -70,20 +73,63 @@ export default function Transactions() {
 
   useEffect(() => { loadTxs(); }, []);
 
-  function openForm() {
+  // ── Helpers ────────────────────────────────────────────────
+  const getAccName = (id: string | null) => accounts.find(a => a.id === id)?.name ?? null;
+  const getCatName = (id: string | null) => categories.find(c => c.id === id)?.name ?? null;
+  const getJarName = (id: string | null) => jars.find(j => j.id === id)?.name ?? null;
+
+  function enrichFromStore(tx: Transaction): Transaction {
+    return {
+      ...tx,
+      source_name: getAccName(tx.source_account_id),
+      destination_name: getAccName(tx.destination_account_id),
+      category_name: getCatName(tx.category_id),
+      piggy_bank_name: getJarName(tx.piggy_bank_id),
+      destination_piggy_bank_name: getJarName(tx.destination_piggy_bank_id),
+    };
+  }
+
+  // ── Open forms ────────────────────────────────────────────
+  function openCreate() {
+    setEditTx(null);
     setForm(emptyForm());
+    setError('');
+    setShowForm(true);
+  }
+
+  function openEdit(tx: Transaction) {
+    setEditTx(tx);
+    setForm({
+      date: tx.date,
+      description: tx.description || '',
+      type: tx.type,
+      amount: String(tx.amount),
+      currency: tx.currency,
+      sourceAccountId: tx.source_account_id || '',
+      destAccountId: tx.destination_account_id || '',
+      categoryId: tx.category_id || '',
+      piggyBankId: tx.piggy_bank_id || '',
+      destPiggyBankId: tx.destination_piggy_bank_id || '',
+      foreignAmount: tx.foreign_amount ? String(tx.foreign_amount) : '',
+      foreignCurrency: (tx.foreign_currency as CurrencyCode) || 'USD',
+      fee: tx.fee ? String(tx.fee) : '',
+      notes: tx.notes || '',
+      loanId: '',
+    });
     setError('');
     setShowForm(true);
   }
 
   function closeForm() {
     setShowForm(false);
+    setEditTx(null);
     setForm(emptyForm());
     setError('');
   }
 
   const f = (k: keyof TxForm, v: string) => setForm(prev => ({ ...prev, [k]: v }));
 
+  // ── Submit ────────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -109,21 +155,35 @@ export default function Transactions() {
       reconciled: false,
     };
 
-    // Optimistic: build a fake enriched tx
-    const getAccName = (id: string) => accounts.find(a => a.id === id)?.name ?? null;
-    const getCatName = (id: string) => categories.find(c => c.id === id)?.name ?? null;
-    const getJarName = (id: string) => jars.find(j => j.id === id)?.name ?? null;
+    // ── EDIT ─────────────────────────────────────────────────
+    if (editTx) {
+      const optimistic = enrichFromStore({ ...editTx, ...payload as Transaction });
+      setTxs(prev => prev.map(t => t.id === editTx.id ? optimistic : t));
+      closeForm();
+      try {
+        const real = await db.transactions.update(editTx.id, payload);
+        setTxs(prev => prev.map(t => t.id === editTx.id ? enrichFromStore(real) : t));
+      } catch {
+        setTxs(prev => prev.map(t => t.id === editTx.id ? editTx : t));
+        setError('Error al actualizar la transacción');
+        setShowForm(true);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
 
+    // ── CREATE ───────────────────────────────────────────────
     const tempId = generateId();
     const optimistic: Transaction = {
       ...payload as Transaction,
-      id: tempId, user_id: '', amount_usd: amt, created_at: new Date().toISOString(),
-      fee_currency: null,
-      source_name: payload.source_account_id ? getAccName(payload.source_account_id) : null,
-      destination_name: payload.destination_account_id ? getAccName(payload.destination_account_id) : null,
-      category_name: payload.category_id ? getCatName(payload.category_id) : null,
-      piggy_bank_name: payload.piggy_bank_id ? getJarName(payload.piggy_bank_id) : null,
-      destination_piggy_bank_name: payload.destination_piggy_bank_id ? getJarName(payload.destination_piggy_bank_id) : null,
+      id: tempId, user_id: '', amount_usd: amt,
+      created_at: new Date().toISOString(), fee_currency: null,
+      source_name: getAccName(payload.source_account_id ?? null),
+      destination_name: getAccName(payload.destination_account_id ?? null),
+      category_name: getCatName(payload.category_id ?? null),
+      piggy_bank_name: getJarName(payload.piggy_bank_id ?? null),
+      destination_piggy_bank_name: getJarName(payload.destination_piggy_bank_id ?? null),
     };
 
     setTxs(prev => [optimistic, ...prev]);
@@ -131,17 +191,12 @@ export default function Transactions() {
 
     try {
       const real = await db.transactions.create(payload);
-      setTxs(prev => prev.map(t => t.id === tempId ? { ...real,
-        source_name: getAccName(real.source_account_id ?? ''),
-        destination_name: getAccName(real.destination_account_id ?? ''),
-        category_name: getCatName(real.category_id ?? ''),
-        piggy_bank_name: getJarName(real.piggy_bank_id ?? ''),
-        destination_piggy_bank_name: getJarName(real.destination_piggy_bank_id ?? ''),
-      } : t));
+      setTxs(prev => prev.map(t => t.id === tempId ? enrichFromStore(real) : t));
 
-      // Link to loan if selected
-      if (form.loanId && (form.type === 'withdrawal' || form.type === 'deposit')) {
-        const movType = form.type === 'withdrawal' ? 'payment' : 'increase';
+      // Vincular a préstamo:
+      // gasto → suma a la deuda (increase), ingreso → paga la deuda (payment)
+      if (form.loanId && form.type !== 'transfer') {
+        const movType = form.type === 'withdrawal' ? 'increase' : 'payment';
         await db.liabilities.addMovement({
           liability_id: form.loanId,
           date: form.date,
@@ -178,14 +233,14 @@ export default function Transactions() {
   const assetAccounts = accounts.filter(a => a.type === 'asset');
   const showSource = form.type === 'withdrawal' || form.type === 'transfer';
   const showDest = form.type === 'deposit' || form.type === 'transfer';
-  const jarLabel = form.type === 'deposit' ? 'Jarra (destino)' : form.type === 'withdrawal' ? 'Jarra (origen)' : 'Jarra origen';
+  const jarLabel = form.type === 'deposit' ? 'Jarra (destino ingreso)' : form.type === 'withdrawal' ? 'Jarra (origen gasto)' : 'Jarra origen';
   const activeLoans = liabilities.filter(l => !l.archived);
 
   return (
     <div className="p-4 lg:p-6 max-w-5xl mx-auto space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-text">Transacciones</h1>
-        <Button onClick={openForm}>
+        <Button onClick={openCreate}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
           Nueva
         </Button>
@@ -227,37 +282,51 @@ export default function Transactions() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-surface-light/40 text-xs text-text-muted">
-                <th className="px-5 py-3 text-left">Fecha</th>
-                <th className="px-5 py-3 text-left">Descripción</th>
-                <th className="px-5 py-3 text-left">Tipo</th>
-                <th className="px-5 py-3 text-left">Cuenta</th>
-                <th className="px-5 py-3 text-left">Categoría</th>
-                <th className="px-5 py-3 text-right">Monto</th>
-                <th className="px-5 py-3" />
+                <th className="px-4 py-3 text-left">Fecha</th>
+                <th className="px-4 py-3 text-left">Descripción</th>
+                <th className="px-4 py-3 text-left">Tipo</th>
+                <th className="px-4 py-3 text-left">Cuenta</th>
+                <th className="px-4 py-3 text-left">Jarra</th>
+                <th className="px-4 py-3 text-left">Categoría</th>
+                <th className="px-4 py-3 text-right">Monto</th>
+                <th className="px-4 py-3 w-16" />
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-light/40">
               {txs.length === 0 ? (
-                <tr><td colSpan={7} className="px-5 py-10 text-center text-text-muted">Sin transacciones</td></tr>
+                <tr><td colSpan={8} className="px-5 py-10 text-center text-text-muted">Sin transacciones</td></tr>
               ) : txs.map(tx => (
-                <tr key={tx.id} className="hover:bg-surface-elevated/50 group">
-                  <td className="px-5 py-3 text-text-muted whitespace-nowrap">{formatDate(tx.date)}</td>
-                  <td className="px-5 py-3 text-text max-w-[200px] truncate">{tx.description || '—'}</td>
-                  <td className="px-5 py-3">
+                <tr
+                  key={tx.id}
+                  className="hover:bg-surface-elevated/50 group cursor-pointer"
+                  onClick={() => openEdit(tx)}
+                >
+                  <td className="px-4 py-3 text-text-muted whitespace-nowrap">{formatDate(tx.date)}</td>
+                  <td className="px-4 py-3 text-text max-w-[180px] truncate">{tx.description || '—'}</td>
+                  <td className="px-4 py-3">
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${typeBg[tx.type]}`}>
                       {typeLabel[tx.type]}
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-text-muted max-w-[150px] truncate">
+                  <td className="px-4 py-3 text-text-muted max-w-[120px] truncate">
                     {tx.source_name || tx.destination_name || '—'}
                   </td>
-                  <td className="px-5 py-3 text-text-muted">{tx.category_name || '—'}</td>
-                  <td className={`px-5 py-3 text-right font-semibold font-mono ${typeColor[tx.type]}`}>
+                  <td className="px-4 py-3 text-text-muted max-w-[100px] truncate">
+                    {tx.piggy_bank_name || '—'}
+                  </td>
+                  <td className="px-4 py-3 text-text-muted max-w-[100px] truncate">
+                    {tx.category_name || '—'}
+                  </td>
+                  <td className={`px-4 py-3 text-right font-semibold font-mono ${typeColor[tx.type]}`}>
                     {tx.type === 'withdrawal' ? '−' : tx.type === 'deposit' ? '+' : ''}
                     {formatCurrency(parseFloat(String(tx.amount)), tx.currency)}
                   </td>
-                  <td className="px-3 py-3">
-                    <Button size="icon" variant="danger" className="opacity-0 group-hover:opacity-100" onClick={() => handleDelete(tx)}>
+                  <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                    <Button
+                      size="icon" variant="danger"
+                      className="opacity-0 group-hover:opacity-100"
+                      onClick={() => handleDelete(tx)}
+                    >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
                     </Button>
                   </td>
@@ -273,19 +342,16 @@ export default function Transactions() {
         {loading ? (
           <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
         ) : txs.length === 0 ? (
-          <Card className="text-center py-10">
-            <p className="text-text-muted">Sin transacciones</p>
-          </Card>
+          <Card className="text-center py-10"><p className="text-text-muted">Sin transacciones</p></Card>
         ) : txs.map(tx => (
-          <Card key={tx.id} padding="sm">
+          <Card key={tx.id} padding="sm" className="cursor-pointer active:bg-surface-elevated" onClick={() => openEdit(tx)}>
             <div className="flex items-center gap-3">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <p className="text-sm font-medium text-text truncate">{tx.description || '—'}</p>
-                </div>
+                <p className="text-sm font-medium text-text truncate">{tx.description || '—'}</p>
                 <p className="text-xs text-text-muted">
                   {formatDate(tx.date)} · {typeLabel[tx.type]}
                   {tx.source_name && ` · ${tx.source_name}`}
+                  {tx.piggy_bank_name && ` · ${tx.piggy_bank_name}`}
                   {tx.category_name && ` · ${tx.category_name}`}
                 </p>
               </div>
@@ -294,31 +360,39 @@ export default function Transactions() {
                   {tx.type === 'withdrawal' ? '−' : tx.type === 'deposit' ? '+' : ''}
                   {formatCurrency(parseFloat(String(tx.amount)), tx.currency)}
                 </p>
-                <button onClick={() => handleDelete(tx)} className="text-danger/60 hover:text-danger text-xs mt-0.5">Eliminar</button>
+                <button
+                  onClick={e => { e.stopPropagation(); handleDelete(tx); }}
+                  className="text-danger/60 hover:text-danger text-xs mt-0.5"
+                >
+                  Eliminar
+                </button>
               </div>
             </div>
           </Card>
         ))}
       </div>
 
-      {/* FAB for mobile */}
+      {/* FAB mobile */}
       <button
-        onClick={openForm}
-        className="sm:hidden fixed bottom-20 right-4 w-14 h-14 bg-primary rounded-full shadow-lg flex items-center justify-center text-white z-20"
+        onClick={openCreate}
+        className="sm:hidden fixed bottom-20 right-4 w-14 h-14 bg-primary rounded-full flex items-center justify-center text-white z-20"
         style={{ boxShadow: '0 4px 20px rgba(22,163,74,0.4)' }}
       >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
       </button>
 
-      {/* Form */}
+      {/* Form modal — create & edit */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
           <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeForm} />
-          <div className="relative w-full sm:max-w-lg bg-surface rounded-t-2xl sm:rounded-2xl border border-surface-light/60 z-10 max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-surface border-b border-surface-light/40 px-5 py-4">
+          <div className="relative w-full sm:max-w-lg bg-surface rounded-t-2xl sm:rounded-2xl border border-surface-light/60 z-10 max-h-[92vh] overflow-y-auto">
+            {/* Header */}
+            <div className="sticky top-0 bg-surface border-b border-surface-light/40 px-5 py-4 z-10">
               <div className="w-10 h-1 bg-surface-light rounded-full mx-auto mb-3 sm:hidden" />
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-text">Nueva transacción</h2>
+                <h2 className="text-base font-semibold text-text">
+                  {editTx ? 'Editar transacción' : 'Nueva transacción'}
+                </h2>
                 <button onClick={closeForm} className="text-text-muted hover:text-text">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
@@ -332,9 +406,7 @@ export default function Transactions() {
               <div className="grid grid-cols-3 gap-2">
                 {(['withdrawal', 'deposit', 'transfer'] as TransactionType[]).map(t => (
                   <button
-                    key={t}
-                    type="button"
-                    onClick={() => f('type', t)}
+                    key={t} type="button" onClick={() => f('type', t)}
                     className={`py-2.5 rounded-xl text-sm font-medium transition-colors border ${
                       form.type === t
                         ? t === 'withdrawal' ? 'border-danger bg-danger/10 text-danger'
@@ -424,8 +496,9 @@ export default function Transactions() {
                 </Field>
               )}
 
-              {form.type !== 'transfer' && activeLoans.length > 0 && (
-                <Field label="Vincular a préstamo">
+              {/* Loan link — solo en crear, no en editar */}
+              {!editTx && form.type !== 'transfer' && activeLoans.length > 0 && (
+                <Field label={form.type === 'withdrawal' ? 'Cargar a préstamo (suma a la deuda)' : 'Pago de préstamo (reduce la deuda)'}>
                   <Select value={form.loanId} onChange={e => f('loanId', e.target.value)}>
                     <option value="">— No vincular —</option>
                     {activeLoans.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
@@ -439,7 +512,9 @@ export default function Transactions() {
 
               <div className="flex gap-3 pt-1">
                 <Button variant="outline" className="flex-1" onClick={closeForm} type="button">Cancelar</Button>
-                <Button type="submit" loading={saving} className="flex-1">Guardar</Button>
+                <Button type="submit" loading={saving} className="flex-1">
+                  {editTx ? 'Actualizar' : 'Guardar'}
+                </Button>
               </div>
             </form>
           </div>

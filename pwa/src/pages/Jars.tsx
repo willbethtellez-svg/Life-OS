@@ -10,6 +10,7 @@ const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
 interface JarForm {
   name: string;
   currency: CurrencyCode;
+  initial_amount: string;
   target_amount: string;
   start_date: string;
   target_date: string;
@@ -17,7 +18,7 @@ interface JarForm {
 }
 
 const emptyForm = (): JarForm => ({
-  name: '', currency: 'USD', target_amount: '', start_date: '', target_date: '', notes: '',
+  name: '', currency: 'USD', initial_amount: '0', target_amount: '', start_date: '', target_date: '', notes: '',
 });
 
 export default function Jars() {
@@ -40,8 +41,13 @@ export default function Jars() {
     if (jar) {
       setEditId(jar.id);
       setForm({
-        name: jar.name, currency: jar.currency, target_amount: String(jar.target_amount),
-        start_date: jar.start_date || '', target_date: jar.target_date || '', notes: jar.notes || '',
+        name: jar.name,
+        currency: jar.currency,
+        initial_amount: String(jar.initial_amount ?? 0),
+        target_amount: String(jar.target_amount),
+        start_date: jar.start_date || '',
+        target_date: jar.target_date || '',
+        notes: jar.notes || '',
       });
     } else {
       setEditId(null);
@@ -63,10 +69,16 @@ export default function Jars() {
     e.preventDefault();
     setSaving(true);
     setError('');
+    const initial = parseFloat(form.initial_amount) || 0;
     const target = parseFloat(form.target_amount) || 0;
     const payload = {
-      name: form.name, currency: form.currency as CurrencyCode, target_amount: target,
-      start_date: form.start_date || null, target_date: form.target_date || null, notes: form.notes,
+      name: form.name,
+      currency: form.currency as CurrencyCode,
+      initial_amount: initial,
+      target_amount: target,
+      start_date: form.start_date || null,
+      target_date: form.target_date || null,
+      notes: form.notes,
     };
     try {
       if (editId) {
@@ -78,11 +90,12 @@ export default function Jars() {
       } else {
         const tempId = generateId();
         const optimistic: PiggyBank = {
-          id: tempId, user_id: '', current_amount: 0, created_at: new Date().toISOString(), ...payload,
+          id: tempId, user_id: '', current_amount: initial, created_at: new Date().toISOString(), ...payload,
         };
         addJar(optimistic);
         closeForm();
-        const real = await db.piggyBanks.create(payload);
+        // Set current_amount = initial_amount when creating
+        const real = await db.piggyBanks.create({ ...payload, current_amount: initial });
         updateJar(tempId, real);
       }
     } catch {
@@ -127,7 +140,8 @@ export default function Jars() {
 
   function computeRunningBalance(index: number, txList: Transaction[]): number {
     if (!ledger) return 0;
-    let bal = 0;
+    const initial = parseFloat(String(ledger.initial_amount ?? 0));
+    let bal = initial;
     for (let i = 0; i <= index; i++) {
       const { amount, isIn } = getTxAmount(txList[i], ledger.id);
       bal += isIn ? amount : -amount;
@@ -139,10 +153,11 @@ export default function Jars() {
     sortOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
   );
 
-  // Ledger view
+  // ── Ledger view ──────────────────────────────────────────────
   if (ledger) {
     const current = parseFloat(String(ledger.current_amount));
     const target = parseFloat(String(ledger.target_amount));
+    const initial = parseFloat(String(ledger.initial_amount ?? 0));
     const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
 
     return (
@@ -201,10 +216,14 @@ export default function Jars() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-light/40">
+                {/* Opening balance row */}
                 <tr className="bg-surface-elevated/40">
-                  <td className="px-5 py-2 text-xs text-text-muted" colSpan={4}>Saldo inicial</td>
+                  <td className="px-5 py-2 text-xs text-text-muted">{ledger.created_at.split('T')[0]}</td>
+                  <td className="px-5 py-2 text-xs text-text-muted italic">Saldo inicial</td>
+                  <td className="px-5 py-2" />
+                  <td className="px-5 py-2" />
                   <td className="px-5 py-2 text-right text-xs font-mono text-text-muted">
-                    {formatCurrency(0, ledger.currency)}
+                    {formatCurrency(initial, ledger.currency)}
                   </td>
                 </tr>
                 {displayTxs.map((tx, i) => {
@@ -233,6 +252,13 @@ export default function Jars() {
 
         {/* Mobile list */}
         <div className="sm:hidden space-y-2">
+          {/* Opening balance card */}
+          <Card padding="sm" className="bg-surface-elevated/40">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-text-muted italic">Saldo inicial</p>
+              <p className="text-xs font-mono text-text-muted">{formatCurrency(initial, ledger.currency)}</p>
+            </div>
+          </Card>
           {ledgerLoading ? (
             <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
           ) : displayTxs.map((tx, i) => {
@@ -260,6 +286,7 @@ export default function Jars() {
     );
   }
 
+  // ── List view ────────────────────────────────────────────────
   return (
     <div className="p-4 lg:p-6 max-w-4xl mx-auto space-y-5">
       <div className="flex items-center justify-between">
@@ -298,7 +325,7 @@ export default function Jars() {
               </div>
               <div className="flex justify-between text-xs text-text-muted">
                 <span>{formatCurrency(current, jar.currency)}</span>
-                <span>{formatCurrency(target, jar.currency)}</span>
+                <span>Meta: {formatCurrency(target, jar.currency)}</span>
               </div>
             </Card>
           );
@@ -312,7 +339,7 @@ export default function Jars() {
         </Card>
       )}
 
-      {/* Form */}
+      {/* Form — bottom sheet on mobile */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center">
           <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeForm} />
@@ -332,10 +359,13 @@ export default function Jars() {
                     {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </Select>
                 </Field>
-                <Field label="Meta">
-                  <Input type="number" step="any" min="0" value={form.target_amount} onChange={e => f('target_amount', e.target.value)} placeholder="0.00" required />
+                <Field label="Saldo inicial">
+                  <Input type="number" step="any" min="0" value={form.initial_amount} onChange={e => f('initial_amount', e.target.value)} placeholder="0.00" />
                 </Field>
               </div>
+              <Field label="Meta">
+                <Input type="number" step="any" min="0" value={form.target_amount} onChange={e => f('target_amount', e.target.value)} placeholder="0.00" required />
+              </Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Fecha inicio">
                   <Input type="date" value={form.start_date} onChange={e => f('start_date', e.target.value)} />

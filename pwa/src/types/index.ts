@@ -68,6 +68,7 @@ export interface PiggyBank {
   name: string;
   target_amount: number;
   current_amount: number;
+  initial_amount: number;
   currency: CurrencyCode;
   start_date: string | null;
   target_date: string | null;
