@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
+import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Input, Field, Select } from '@/components/ui/Input';
+import { Spinner } from '@/components/ui/Spinner';
 import type { CurrencyCode } from '@/types';
 
 export default function AccountsPage() {
@@ -70,15 +74,12 @@ export default function AccountsPage() {
     setTxHistory([]);
     try {
       const txs = await db.accounts.transactions(account.id, { limit: 100 });
-      // Sort ascending for running balance
       txs.sort((a: any, b: any) => a.date.localeCompare(b.date));
       setTxHistory(txs);
     } catch (err) { console.error(err); }
   }
 
   function getAmountForAccount(tx: any): number {
-    // For a transfer TO this account, use foreign_amount (destination currency)
-    // For a transfer FROM this account, use amount (source currency)
     if (tx.type === 'transfer' && tx.destination_account_id === selected?.id && tx.foreign_amount) {
       return parseFloat(String(tx.foreign_amount));
     }
@@ -92,12 +93,8 @@ export default function AccountsPage() {
       const t = txHistory[i];
       if (!t) continue;
       const amt = getAmountForAccount(t);
-      if (t.source_account_id === selected?.id) {
-        balance -= amt;
-      }
-      if (t.destination_account_id === selected?.id) {
-        balance += amt;
-      }
+      if (t.source_account_id === selected?.id) balance -= amt;
+      if (t.destination_account_id === selected?.id) balance += amt;
     }
     return balance;
   }
@@ -123,107 +120,91 @@ export default function AccountsPage() {
     return sum;
   }, 0);
 
-  const totalRealUSD = accounts.reduce((sum: number, acc: any) => {
-    const real = realBalances[acc.id] ? parseFloat(realBalances[acc.id]) : null;
-    if (real === null) return sum;
-    if (acc.currency === 'USD' || acc.currency === 'USDT') return sum + real;
-    return sum;
-  }, 0);
-
-  const totalDiff = totalRealUSD - totalUSD;
-
   // ─── Account detail / ledger view ─────────────────────────
   if (selected) {
     const balance = parseFloat(selected.current_balance || '0');
     const currency = selected.currency || 'USD';
     return (
       <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
-        {/* Back + header */}
         <div className="flex items-center gap-3">
-          <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text p-1">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          <button onClick={() => setSelected(null)} className="text-text-muted hover:text-text p-2 rounded-xl hover:bg-surface-elevated transition-colors">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
           </button>
-          <div>
-            <h1 className="text-xl font-bold">{selected.name}</h1>
-            <p className="text-sm text-text-muted">{currency} · {selected.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
+          <div className="flex-1">
+            <h1 className="text-lg font-bold">{selected.name}</h1>
+            <p className="text-xs text-text-muted">{currency} · {selected.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
           </div>
-          <div className="ml-auto text-right">
+          <div className="text-right">
             <p className="text-2xl font-bold text-primary">{formatCurrency(balance, currency)}</p>
           </div>
         </div>
 
-        {/* Reconcile */}
         <div className="flex gap-2">
-          <button onClick={() => setShowReconcile(!showReconcile)}
-            className="bg-surface border border-surface-light rounded-lg px-4 py-2 text-sm font-medium text-text-muted hover:text-text transition-colors">
+          <Button variant="outline" size="sm" onClick={() => setShowReconcile(!showReconcile)}>
             {showReconcile ? 'Cancelar' : 'Conciliar'}
-          </button>
-          <button onClick={() => { startEdit(selected); setSelected(null); }}
-            className="bg-surface border border-surface-light rounded-lg px-4 py-2 text-sm font-medium text-text-muted hover:text-text transition-colors">
-            Editar
-          </button>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => { startEdit(selected); setSelected(null); }}>
+            Editar cuenta
+          </Button>
         </div>
 
         {showReconcile && (
-          <div className="bg-surface rounded-xl p-4 space-y-3 border border-surface-light">
-            <p className="text-sm font-medium">Saldo real</p>
-            <input type="number" step="0.01" value={reconcileAmount} onChange={e => setReconcileAmount(e.target.value)}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary" placeholder={balance.toString()} />
-            {reconcileAmount && (
-              <div className={`text-sm font-medium ${parseFloat(reconcileAmount) !== balance ? 'text-warning' : 'text-secondary'}`}>
-                Diferencia: {formatCurrency(parseFloat(reconcileAmount) - balance, currency)}
-              </div>
-            )}
-            <button onClick={handleReconcile} className="w-full bg-primary hover:bg-primary-dark text-white font-medium rounded-lg py-2 transition-colors">Guardar</button>
-          </div>
+          <Card>
+            <p className="text-sm font-medium mb-3">Saldo real de la cuenta</p>
+            <div className="space-y-3">
+              <Input
+                type="number"
+                step="0.01"
+                value={reconcileAmount}
+                onChange={e => setReconcileAmount(e.target.value)}
+                placeholder={balance.toString()}
+              />
+              {reconcileAmount && (
+                <div className={`text-sm font-medium ${parseFloat(reconcileAmount) !== balance ? 'text-warning' : 'text-primary'}`}>
+                  Diferencia: {formatCurrency(parseFloat(reconcileAmount) - balance, currency)}
+                </div>
+              )}
+              <Button onClick={handleReconcile} size="md" className="w-full">Guardar saldo</Button>
+            </div>
+          </Card>
         )}
 
-        {/* Ledger / Transaction history */}
-        <div className="bg-surface rounded-xl border border-surface-light overflow-hidden">
-          <div className="px-4 py-3 border-b border-surface-light">
-            <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wide">Libro contable</h3>
+        {/* Ledger */}
+        <Card padding="none">
+          <div className="px-5 py-4 border-b border-surface-light/60">
+            <CardTitle>Libro contable</CardTitle>
           </div>
-
-          {/* Desktop ledger table */}
-          <div className="hidden lg:block">
+          <div className="hidden lg:block overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-surface-light bg-surface-light/30">
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Fecha</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Descripción</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Debe (ingreso)</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Haber (egreso)</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-medium text-text-muted uppercase tracking-wider">Saldo</th>
+                <tr className="border-b border-surface-light/40 bg-surface-elevated/30">
+                  <th className="text-left px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Fecha</th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Descripción</th>
+                  <th className="text-right px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Debe</th>
+                  <th className="text-right px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Haber</th>
+                  <th className="text-right px-5 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Saldo</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-surface-light/30">
                 {txHistory.length === 0 ? (
-                  <tr><td colSpan={5} className="text-center py-8 text-text-muted text-sm">Sin movimientos</td></tr>
+                  <tr><td colSpan={5} className="text-center py-10 text-text-muted text-sm">Sin movimientos</td></tr>
                 ) : (
                   txHistory.map((tx: any, i: number) => {
                     const amount = getAmountForAccount(tx);
-                    const isDebit = tx.destination_account_id === selected.id; // ingresa a esta cuenta
-                    const isCredit = tx.source_account_id === selected.id; // sale de esta cuenta
+                    const isDebit = tx.destination_account_id === selected.id;
+                    const isCredit = tx.source_account_id === selected.id;
                     const running = computeRunningBalance(tx, i);
                     return (
-                      <tr key={tx.id} className="border-b border-surface-light last:border-0 hover:bg-surface-light/30 transition-colors">
-                        <td className="px-4 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
-                        <td className="px-4 py-3">
-                          <p className="text-sm font-medium truncate max-w-[300px]">{tx.description || 'Sin descripción'}</p>
-                          {tx.type === 'transfer' && isDebit && (
-                            <p className="text-[11px] text-text-muted">desde {tx.source_name || 'origen'}</p>
-                          )}
-                          {tx.type === 'transfer' && isCredit && (
-                            <p className="text-[11px] text-text-muted">hacia {tx.destination_name || 'destino'}</p>
-                          )}
+                      <tr key={tx.id} className="hover:bg-surface-elevated/40 transition-colors">
+                        <td className="px-5 py-3 text-sm text-text-muted whitespace-nowrap">{tx.date}</td>
+                        <td className="px-5 py-3">
+                          <p className="text-sm font-medium truncate max-w-xs">{tx.description || 'Sin descripción'}</p>
+                          {tx.type === 'transfer' && isDebit && <p className="text-[11px] text-text-muted">desde {tx.source_name || 'origen'}</p>}
+                          {tx.type === 'transfer' && isCredit && <p className="text-[11px] text-text-muted">hacia {tx.destination_name || 'destino'}</p>}
                         </td>
-                        <td className="px-4 py-3 text-right text-sm font-medium text-secondary">
-                          {isDebit ? formatCurrency(amount, currency) : ''}
-                        </td>
-                        <td className="px-4 py-3 text-right text-sm font-medium text-danger">
-                          {isCredit ? formatCurrency(amount, currency) : ''}
-                        </td>
-                        <td className="px-4 py-3 text-right text-sm font-semibold text-text">{formatCurrency(running, currency)}</td>
+                        <td className="px-5 py-3 text-right text-sm font-medium text-primary">{isDebit ? formatCurrency(amount, currency) : ''}</td>
+                        <td className="px-5 py-3 text-right text-sm font-medium text-danger">{isCredit ? formatCurrency(amount, currency) : ''}</td>
+                        <td className="px-5 py-3 text-right text-sm font-semibold text-text">{formatCurrency(running, currency)}</td>
                       </tr>
                     );
                   })
@@ -231,25 +212,22 @@ export default function AccountsPage() {
               </tbody>
             </table>
           </div>
-
-          {/* Mobile ledger list */}
-          <div className="lg:hidden space-y-0">
+          <div className="lg:hidden divide-y divide-surface-light/30">
             {txHistory.length === 0 ? (
-              <div className="text-center py-8 text-text-muted"><p className="text-sm">Sin movimientos</p></div>
+              <div className="py-10 text-center text-text-muted text-sm">Sin movimientos</div>
             ) : (
               txHistory.map((tx: any, i: number) => {
                 const amount = getAmountForAccount(tx);
-                const isDebit = tx.destination_account_id === selected.id;
                 const isCredit = tx.source_account_id === selected.id;
                 const running = computeRunningBalance(tx, i);
                 return (
-                  <div key={tx.id} className="flex items-center justify-between py-3 px-4 border-b border-surface-light last:border-0">
+                  <div key={tx.id} className="flex items-center justify-between px-5 py-3.5">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{tx.description || 'Sin descripción'}</p>
                       <p className="text-xs text-text-muted">{tx.date}</p>
                     </div>
                     <div className="text-right ml-3">
-                      <span className={`text-sm font-semibold ${isCredit ? 'text-danger' : 'text-secondary'}`}>
+                      <span className={`text-sm font-semibold ${isCredit ? 'text-danger' : 'text-primary'}`}>
                         {isCredit ? '−' : '+'}{formatCurrency(amount, currency)}
                       </span>
                       <p className="text-[11px] text-text-muted">{formatCurrency(running, currency)}</p>
@@ -259,86 +237,84 @@ export default function AccountsPage() {
               })
             )}
           </div>
-        </div>
+        </Card>
       </div>
     );
   }
 
-  // ─── Account list (default view) ──────────────────────────
+  // ─── Account list ─────────────────────────────────────────
   return (
     <div className="p-4 lg:p-6 space-y-4 max-w-4xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Cuentas</h1>
-        <button onClick={() => { resetForm(); setShowForm(!showForm); }}
-          className="bg-primary hover:bg-primary-dark text-white rounded-full w-10 h-10 flex items-center justify-center text-xl font-bold transition-colors">
-          {showForm ? '×' : '+'}
-        </button>
+        <div>
+          <h1 className="text-xl font-bold">Cuentas</h1>
+          <p className="text-sm text-text-muted">Gestiona tus cuentas bancarias</p>
+        </div>
+        <Button
+          size="icon"
+          onClick={() => { resetForm(); setShowForm(!showForm); }}
+          className="rounded-full w-10 h-10"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            {showForm ? <path d="M6 18L18 6M6 6l12 12" /> : <path d="M12 5v14M5 12h14" />}
+          </svg>
+        </Button>
       </div>
 
-      {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>}
+      {error && <div className="bg-danger/10 border border-danger/20 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
 
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-surface rounded-xl p-4 lg:p-5 space-y-3 border border-surface-light">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Nombre</label>
-              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="Ej. Bco Familiar" required />
+        <Card>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <Field label="Nombre">
+                <Input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej. Bco Familiar" required />
+              </Field>
+              <Field label="Tipo">
+                <Select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}>
+                  <option value="asset">Activo</option>
+                  <option value="liability">Pasivo</option>
+                </Select>
+              </Field>
+              <Field label="Moneda">
+                <Select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value as CurrencyCode }))}>
+                  <option value="USD">USD</option><option value="VES">VES</option><option value="EUR">EUR</option><option value="BTC">BTC</option><option value="USDT">USDT</option>
+                </Select>
+              </Field>
             </div>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Tipo</label>
-              <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="asset">Activo</option><option value="liability">Pasivo</option>
-              </select>
+            <Field label="Saldo inicial">
+              <Input type="number" step="0.01" value={form.initialBalance} onChange={e => setForm(f => ({ ...f, initialBalance: e.target.value }))} placeholder="0.00" />
+            </Field>
+            <div className="flex gap-2">
+              <Button type="submit" className="flex-1">{editingId ? 'Guardar' : 'Crear cuenta'}</Button>
+              <Button type="button" variant="ghost" onClick={resetForm}>Cancelar</Button>
             </div>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Moneda</label>
-              <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value as CurrencyCode }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="USD">USD</option><option value="VES">VES</option><option value="EUR">EUR</option><option value="BTC">BTC</option><option value="USDT">USDT</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Saldo inicial</label>
-            <input type="number" step="0.01" value={form.initialBalance} onChange={e => setForm(f => ({ ...f, initialBalance: e.target.value }))}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary" placeholder="0.00" />
-          </div>
-          <div className="flex gap-2">
-            <button type="submit" className="flex-1 bg-primary hover:bg-primary-dark text-white font-medium rounded-lg py-2.5 transition-colors">
-              {editingId ? 'Guardar' : 'Crear cuenta'}
-            </button>
-            <button type="button" onClick={resetForm} className="px-4 py-2.5 text-text-muted hover:text-text">Cancelar</button>
-          </div>
-        </form>
+          </form>
+        </Card>
       )}
 
-      <div className="bg-surface rounded-xl p-4 border border-surface-light">
-        <div className="flex justify-between items-center">
+      {/* Total card */}
+      <Card>
+        <div className="flex items-center justify-between">
           <div>
-            <p className="text-text-muted text-xs uppercase tracking-wide">Total en USD</p>
-            <p className="text-2xl font-bold text-primary mt-1">{formatCurrency(totalUSD)}</p>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Total (USD + USDT)</p>
+            <p className="text-3xl font-bold text-primary">{formatCurrency(totalUSD)}</p>
           </div>
-          {Object.values(realBalances).some(v => v) && (
-            <div className="text-right">
-              <p className="text-text-muted text-xs uppercase tracking-wide">Real en USD</p>
-              <p className="text-2xl font-bold mt-1">{formatCurrency(totalRealUSD)}</p>
-              <p className={`text-xs font-medium ${totalDiff >= 0 ? 'text-secondary' : 'text-danger'}`}>
-                Diferencia: {totalDiff >= 0 ? '+' : ''}{formatCurrency(totalDiff)}
-              </p>
-            </div>
-          )}
+          <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary">
+              <path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+            </svg>
+          </div>
         </div>
-      </div>
+      </Card>
 
+      {/* Account list */}
       <div className="space-y-2">
         {loading ? (
-          <div className="flex justify-center py-8"><div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" /></div>
+          <Spinner fullPage />
         ) : accounts.length === 0 ? (
-          <div className="text-center py-8 text-text-muted">
-            <p className="text-lg mb-1">♢</p>
+          <div className="text-center py-12 text-text-muted">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="mx-auto mb-3 opacity-40"><path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
             <p className="text-sm">No hay cuentas creadas</p>
           </div>
         ) : (
@@ -349,35 +325,42 @@ export default function AccountsPage() {
             const realNum = realVal ? parseFloat(realVal) : null;
             const diff = realNum !== null ? realNum - balance : null;
             return (
-              <div key={acc.id} className="bg-surface rounded-xl p-4 border border-surface-light">
-                <div className="flex items-center justify-between cursor-pointer" onClick={() => loadTransactions(acc)}>
-                  <div>
-                    <p className="font-medium">{acc.name}</p>
-                    <p className="text-xs text-text-muted mt-0.5">{currency} · {acc.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
+              <Card key={acc.id} className="hover:border-surface-elevated cursor-pointer transition-colors" padding="sm">
+                <div className="flex items-center justify-between" onClick={() => loadTransactions(acc)}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-surface-elevated flex items-center justify-center shrink-0">
+                      <span className="text-xs font-bold text-text-muted">{acc.currency}</span>
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">{acc.name}</p>
+                      <p className="text-xs text-text-muted">{acc.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
+                    </div>
                   </div>
                   <div className="text-right">
-                    <p className={`font-bold text-lg ${balance >= 0 ? 'text-secondary' : 'text-danger'}`}>
+                    <p className={`font-bold ${balance >= 0 ? 'text-primary' : 'text-danger'}`}>
                       {formatCurrency(balance, currency)}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 mt-2">
-                  <label className="text-[10px] text-text-muted whitespace-nowrap">Real:</label>
-                  <input type="number" step="0.01" value={realVal || ''} onClick={e => e.stopPropagation()}
+                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-surface-light/40" onClick={e => e.stopPropagation()}>
+                  <label className="text-[10px] text-text-muted whitespace-nowrap">Saldo real:</label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={realVal || ''}
                     onChange={e => setRealBalances(prev => ({ ...prev, [acc.id]: e.target.value }))}
-                    className="flex-1 bg-background border border-surface-light rounded px-2 py-1 text-xs text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-1 focus:ring-primary"
-                    placeholder={balance.toString()} />
+                    className="flex-1 py-1.5 text-xs rounded-lg"
+                    placeholder={balance.toString()}
+                  />
                   {diff !== null && diff !== 0 && (
-                    <span className={`text-[10px] font-medium whitespace-nowrap ${diff > 0 ? 'text-secondary' : 'text-danger'}`}>
+                    <span className={`text-[10px] font-medium whitespace-nowrap ${diff > 0 ? 'text-primary' : 'text-danger'}`}>
                       {diff > 0 ? '+' : ''}{formatCurrency(diff, currency)}
                     </span>
                   )}
-                  <button onClick={(e) => { e.stopPropagation(); startEdit(acc); }}
-                    className="text-[10px] text-primary hover:underline whitespace-nowrap">Editar</button>
-                  <button onClick={(e) => { e.stopPropagation(); handleDelete(acc.id); }}
-                    className="text-[10px] text-danger hover:underline">✕</button>
+                  <button onClick={() => startEdit(acc)} className="text-[10px] text-primary hover:underline whitespace-nowrap">Editar</button>
+                  <button onClick={() => handleDelete(acc.id)} className="text-[10px] text-danger hover:underline">✕</button>
                 </div>
-              </div>
+              </Card>
             );
           })
         )}

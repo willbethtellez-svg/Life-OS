@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '@/lib/db';
 import { formatCurrency, generateId } from '@/lib/utils';
+import { Button } from '@/components/ui/Button';
+import { Spinner } from '@/components/ui/Spinner';
 import type { PendingTransaction, CurrencyCode, TransactionType } from '@/types';
 
 async function getVesRateForDate(date: string): Promise<number | null> {
@@ -314,10 +316,11 @@ export default function TransactionsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Transacciones</h1>
-        <button onClick={() => { resetForm(); setShowForm(!showForm); }}
-          className="bg-primary hover:bg-primary-dark text-white rounded-full w-10 h-10 flex items-center justify-center text-xl font-bold transition-colors">
-          {showForm ? '×' : '+'}
-        </button>
+        <Button size="icon" onClick={() => { resetForm(); setShowForm(!showForm); }} className="rounded-full w-10 h-10">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            {showForm ? <path d="M6 18L18 6M6 6l12 12" /> : <path d="M12 5v14M5 12h14" />}
+          </svg>
+        </Button>
       </div>
 
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>}
@@ -490,10 +493,8 @@ export default function TransactionsPage() {
           )}
 
           <div className="flex gap-2">
-            <button type="submit" className="flex-1 bg-primary hover:bg-primary-dark text-white font-medium rounded-lg py-2.5 transition-colors">
-              {editingTx ? 'Guardar cambios' : 'Registrar'}
-            </button>
-            <button type="button" onClick={resetForm} className="px-4 py-2.5 text-text-muted hover:text-text">Cancelar</button>
+            <Button type="submit" className="flex-1">{editingTx ? 'Guardar cambios' : 'Registrar'}</Button>
+            <Button type="button" variant="ghost" onClick={resetForm}>Cancelar</Button>
           </div>
         </form>
       )}
@@ -535,7 +536,7 @@ export default function TransactionsPage() {
       {tab === 'all' && (
         <div>
           {loading ? (
-            <div className="flex justify-center py-8"><div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" /></div>
+            <Spinner fullPage />
           ) : transactions.length === 0 ? (
             <div className="text-center py-8 text-text-muted"><p className="text-sm">No hay transacciones</p></div>
           ) : (

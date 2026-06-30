@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
+import { Card, CardTitle } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Input, Field, Select } from '@/components/ui/Input';
+import { Spinner } from '@/components/ui/Spinner';
 import type { CurrencyCode } from '@/types';
+
+const typeLabels: Record<string, string> = { loan: 'Préstamo', debt: 'Deuda', credit: 'Crédito' };
 
 export default function LoansPage() {
   const [liabilities, setLiabilities] = useState<any[]>([]);
@@ -54,99 +60,94 @@ export default function LoansPage() {
   const totalDebt = liabilities.reduce((sum: number, l: any) => sum + parseFloat(l.current_balance || l.amount || '0'), 0);
 
   return (
-    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
+    <div className="p-4 lg:p-6 space-y-4 max-w-2xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Préstamos / Deudas</h1>
-        <button onClick={() => { resetForm(); setShowForm(!showForm); }}
-          className="bg-primary hover:bg-primary-dark text-white rounded-full w-10 h-10 flex items-center justify-center text-xl font-bold transition-colors">
-          {showForm ? '×' : '+'}
-        </button>
+        <div>
+          <h1 className="text-xl font-bold">Préstamos / Deudas</h1>
+          <p className="text-sm text-text-muted">Gestiona tus pasivos</p>
+        </div>
+        <Button size="icon" onClick={() => { resetForm(); setShowForm(!showForm); }} className="rounded-full w-10 h-10">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            {showForm ? <path d="M6 18L18 6M6 6l12 12" /> : <path d="M12 5v14M5 12h14" />}
+          </svg>
+        </Button>
       </div>
 
-      {error && <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>}
+      {error && <div className="bg-danger/10 border border-danger/20 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
 
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-surface rounded-xl p-4 space-y-3">
-          <div>
-            <label className="block text-xs text-text-muted mb-1">Nombre</label>
-            <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary" placeholder="Ej. Préstamo Juan" required />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Tipo</label>
-              <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="loan">Préstamo</option><option value="debt">Deuda</option><option value="credit">Crédito</option>
-              </select>
+        <Card>
+          <form onSubmit={handleCreate} className="space-y-3">
+            <Field label="Nombre">
+              <Input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej. Préstamo Juan" required />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Tipo">
+                <Select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}>
+                  <option value="loan">Préstamo</option><option value="debt">Deuda</option><option value="credit">Crédito</option>
+                </Select>
+              </Field>
+              <Field label="Moneda">
+                <Select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value as CurrencyCode }))}>
+                  <option value="USD">USD</option><option value="VES">VES</option><option value="EUR">EUR</option>
+                </Select>
+              </Field>
             </div>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Moneda</label>
-              <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value as CurrencyCode }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary">
-                <option value="USD">USD</option><option value="VES">VES</option><option value="EUR">EUR</option>
-              </select>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Monto total">
+                <Input type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" required />
+              </Field>
+              <Field label="Interés %">
+                <Input type="number" step="0.01" value={form.interestRate} onChange={e => setForm(f => ({ ...f, interestRate: e.target.value }))} placeholder="0" />
+              </Field>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Monto total</label>
-              <input type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary" placeholder="0.00" required />
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Fecha inicio">
+                <Input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} />
+              </Field>
+              <Field label="Vencimiento">
+                <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} />
+              </Field>
             </div>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Interés %</label>
-              <input type="number" step="0.01" value={form.interestRate} onChange={e => setForm(f => ({ ...f, interestRate: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary" placeholder="0" />
+            <div className="flex gap-2">
+              <Button type="submit" className="flex-1">{editingId ? 'Guardar' : 'Crear'}</Button>
+              <Button type="button" variant="ghost" onClick={resetForm}>Cancelar</Button>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Inicio</label>
-              <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" />
-            </div>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Vencimiento</label>
-              <input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
-                className="w-full bg-background border border-surface-light rounded-lg px-3 py-2.5 text-text focus:outline-none focus:ring-2 focus:ring-primary" />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button type="submit" className="flex-1 bg-primary hover:bg-primary-dark text-white font-medium rounded-lg py-2.5 transition-colors">{editingId ? 'Guardar' : 'Crear préstamo'}</button>
-            <button type="button" onClick={resetForm} className="px-4 py-2.5 text-text-muted hover:text-text">Cancelar</button>
-          </div>
-        </form>
+          </form>
+        </Card>
       )}
 
-      <div className="bg-surface rounded-xl p-4">
-        <p className="text-text-muted text-xs uppercase tracking-wide">Deuda total</p>
-        <p className="text-2xl font-bold text-danger mt-1">{formatCurrency(Math.abs(totalDebt))}</p>
-      </div>
+      {/* Total */}
+      <Card>
+        <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-1">Deuda total</p>
+        <p className="text-3xl font-bold text-danger">{formatCurrency(Math.abs(totalDebt))}</p>
+      </Card>
 
       <div className="space-y-2">
-        {loading ? <div className="flex justify-center py-8"><div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" /></div>
-        : liabilities.length === 0 ? <div className="text-center py-8 text-text-muted"><p className="text-sm">No hay préstamos</p></div>
-        : liabilities.map((liab: any) => {
+        {loading ? <Spinner fullPage /> : liabilities.length === 0 ? (
+          <div className="text-center py-10 text-text-muted"><p className="text-sm">No hay préstamos registrados</p></div>
+        ) : liabilities.map((liab: any) => {
           const balance = parseFloat(liab.current_balance || liab.amount || '0');
           const currency = liab.currency || 'USD';
           return (
-            <div key={liab.id} className="bg-surface rounded-xl p-4">
-              <div className="flex items-center justify-between">
-                <div>
+            <Card key={liab.id} padding="sm">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
                   <p className="font-medium">{liab.name}</p>
-                  <p className="text-xs text-text-muted mt-0.5">{liab.type} · {currency}</p>
+                  <p className="text-xs text-text-muted mt-0.5">{typeLabels[liab.type] || liab.type} · {currency}</p>
+                  {liab.interest_rate > 0 && (
+                    <p className="text-xs text-text-muted mt-1">{liab.interest_rate}% interés · Vence: {liab.due_date || 'Sin fecha'}</p>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <p className={`font-bold text-lg ${balance >= 0 ? 'text-secondary' : 'text-danger'}`}>{formatCurrency(balance, currency)}</p>
+                <div className="flex items-center gap-3 ml-3">
+                  <p className="font-bold text-lg text-danger">{formatCurrency(balance, currency)}</p>
                   <div className="flex flex-col gap-1">
-                    <button onClick={() => startEdit(liab)} className="text-[10px] text-primary hover:underline">Editar</button>
-                    <button onClick={() => handleDelete(liab.id)} className="text-[10px] text-danger hover:underline">Eliminar</button>
+                    <Button variant="ghost" size="sm" onClick={() => startEdit(liab)}>Editar</Button>
+                    <Button variant="danger" size="sm" onClick={() => handleDelete(liab.id)}>Eliminar</Button>
                   </div>
                 </div>
               </div>
-              {liab.interest_rate > 0 && <p className="text-xs text-text-muted mt-2">Interés: {liab.interest_rate}% · Vence: {liab.due_date || 'Sin fecha'}</p>}
-            </div>
+            </Card>
           );
         })}
       </div>

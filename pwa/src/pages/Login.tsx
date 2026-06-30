@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/ui/Button";
+import { Input, Field } from "@/components/ui/Input";
 
 export default function LoginPage() {
   const { login, signup } = useAuth();
@@ -15,11 +17,10 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       if (isSignup) {
         await signup(email, password);
-        setError("Cuenta creada. Revisa tu email para confirmar (o revisa el spam).");
+        setError("Cuenta creada. Revisa tu email para confirmar.");
         setIsSignup(false);
       } else {
         await login(email, password);
@@ -34,56 +35,70 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-dvh flex items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm">
+      {/* Background decoration */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-sm relative">
+        {/* Logo */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary">Life OS</h1>
-          <p className="text-text-muted mt-2">Control financiero y del hogar</p>
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/15 mb-4">
+            <span className="text-2xl font-bold text-primary">L</span>
+          </div>
+          <h1 className="text-2xl font-bold text-text">Life OS</h1>
+          <p className="text-text-muted mt-1 text-sm">Control financiero y del hogar</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-text-muted mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full bg-surface border border-surface-light rounded-lg px-4 py-3 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="tu@email.com"
-              required
-            />
-          </div>
+        {/* Card */}
+        <div className="bg-surface border border-surface-light/60 rounded-2xl p-6">
+          <h2 className="text-base font-semibold text-text mb-5">
+            {isSignup ? "Crear cuenta" : "Iniciar sesión"}
+          </h2>
 
-          <div>
-            <label className="block text-sm font-medium text-text-muted mb-1">Contraseña</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-surface border border-surface-light rounded-lg px-4 py-3 text-text placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="••••••••"
-              required
-              minLength={6}
-            />
-          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Field label="Email">
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="tu@email.com"
+                required
+                autoComplete="email"
+              />
+            </Field>
 
-          {error && (
-            <div className={`border rounded-lg px-4 py-3 text-sm ${
-              error.includes("creada") ? "bg-secondary/10 border-secondary/30 text-secondary" : "bg-danger/10 border-danger/30 text-danger"
-            }`}>{error}</div>
-          )}
+            <Field label="Contraseña">
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={6}
+                autoComplete={isSignup ? "new-password" : "current-password"}
+              />
+            </Field>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-primary hover:bg-primary-dark disabled:opacity-50 text-white font-medium rounded-lg px-4 py-3 transition-colors"
-          >
-            {loading ? "Cargando..." : isSignup ? "Crear cuenta" : "Entrar"}
-          </button>
-        </form>
+            {error && (
+              <div className={`border rounded-xl px-4 py-3 text-sm ${
+                error.includes("creada")
+                  ? "bg-primary/10 border-primary/20 text-primary"
+                  : "bg-danger/10 border-danger/20 text-danger"
+              }`}>
+                {error}
+              </div>
+            )}
+
+            <Button type="submit" loading={loading} size="lg" className="w-full mt-2">
+              {isSignup ? "Crear cuenta" : "Entrar"}
+            </Button>
+          </form>
+        </div>
 
         <button
           onClick={() => { setIsSignup(!isSignup); setError(""); }}
-          className="w-full text-center text-sm text-primary hover:underline mt-4"
+          className="w-full text-center text-sm text-text-muted hover:text-primary mt-4 transition-colors"
         >
           {isSignup ? "¿Ya tienes cuenta? Inicia sesión" : "¿No tienes cuenta? Créala aquí"}
         </button>

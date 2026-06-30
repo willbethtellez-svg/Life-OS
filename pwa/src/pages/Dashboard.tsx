@@ -8,8 +8,55 @@ import { es } from "date-fns/locale";
 import { db } from "@/lib/db";
 import { formatCurrency } from "@/lib/utils";
 import { Link } from "react-router-dom";
+import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Spinner } from "@/components/ui/Spinner";
 
-const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
+const PIE_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"];
+
+type Period = "1m" | "3m" | "6m" | "12m";
+
+function TrendIndicator({ value }: { value: number }) {
+  const positive = value >= 0;
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium ${positive ? "text-primary" : "text-danger"}`}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+        <path d={positive ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} />
+      </svg>
+      {Math.abs(value).toFixed(1)}%
+    </span>
+  );
+}
+
+interface MetricCardProps {
+  label: string;
+  value: number;
+  currency?: string;
+  colorClass: string;
+  trend?: number;
+  icon?: string;
+}
+
+function MetricCard({ label, value, colorClass, trend, icon }: MetricCardProps) {
+  return (
+    <Card className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-text-muted uppercase tracking-wider">{label}</p>
+        {icon && <span className="text-base">{icon}</span>}
+      </div>
+      <div>
+        <p className={`text-2xl font-bold tracking-tight ${colorClass}`}>
+          {formatCurrency(value)}
+        </p>
+        {trend !== undefined && (
+          <div className="flex items-center gap-2 mt-1">
+            <TrendIndicator value={trend} />
+            <span className="text-[11px] text-text-muted">vs período anterior</span>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
@@ -19,7 +66,7 @@ export default function DashboardPage() {
   const [categoryData, setCategoryData] = useState<any[]>([]);
   const [monthlyTrend, setMonthlyTrend] = useState<any[]>([]);
   const [netWorth, setNetWorth] = useState(0);
-  const [period, setPeriod] = useState<"1m" | "3m" | "6m" | "12m">("3m");
+  const [period, setPeriod] = useState<Period>("3m");
   const [error, setError] = useState("");
 
   const fetchData = useCallback(async () => {
@@ -31,6 +78,7 @@ export default function DashboardPage() {
       const start = startOfMonth(subMonths(now, months)).toISOString().split("T")[0];
       const end = endOfMonth(now).toISOString().split("T")[0];
 
+      // Net worth from asset accounts (USD/USDT only for simplicity)
       const accountsList = await db.accounts.list({ type: "asset" });
       const nw = accountsList.reduce((sum: number, a: any) => {
         const bal = parseFloat(a.current_balance || "0");
@@ -40,52 +88,43 @@ export default function DashboardPage() {
       setNetWorth(nw);
 
       const txList = await db.transactions.list({ start, end, limit: 50 });
-      setRecentTxs(txList.slice(0, 20));
+      setRecentTxs(txList.slice(0, 10));
 
-      const income = txList
-        .filter((t: any) => t.type === "deposit")
-        .reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
-      const expense = txList
-        .filter((t: any) => t.type === "withdrawal")
-        .reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
+      const income = txList.filter((t: any) => t.type === "deposit").reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
+      const expense = txList.filter((t: any) => t.type === "withdrawal").reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
       setMonthlyIncome(income);
       setMonthlyExpense(expense);
 
       const cats: Record<string, number> = {};
-      txList
-        .filter((t: any) => t.type === "withdrawal")
-        .forEach((t: any) => {
-          const catName = t.category_name || "Sin categoría";
-          cats[catName] = (cats[catName] || 0) + (t.amount_usd || 0);
-        });
+      txList.filter((t: any) => t.type === "withdrawal").forEach((t: any) => {
+        const catName = t.category_name || "Sin categoría";
+        cats[catName] = (cats[catName] || 0) + (t.amount_usd || 0);
+      });
       setCategoryData(
         Object.entries(cats)
           .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
           .sort((a, b) => b.value - a.value)
+          .slice(0, 8)
       );
 
       const trendData = [];
       for (let i = months - 1; i >= 0; i--) {
         const mStart = startOfMonth(subMonths(now, i));
         const mEnd = endOfMonth(subMonths(now, i));
-        const label = format(mStart, "MMM", { locale: es });
+        const label = format(mStart, months > 6 ? "MMM yy" : "MMM", { locale: es });
         const mTxList = await db.transactions.list({
           start: mStart.toISOString().split("T")[0],
           end: mEnd.toISOString().split("T")[0],
           limit: 200,
         });
-        const mIncome = mTxList
-          .filter((t: any) => t.type === "deposit")
-          .reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
-        const mExpense = mTxList
-          .filter((t: any) => t.type === "withdrawal")
-          .reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
+        const mIncome = mTxList.filter((t: any) => t.type === "deposit").reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
+        const mExpense = mTxList.filter((t: any) => t.type === "withdrawal").reduce((s: number, t: any) => s + (t.amount_usd || 0), 0);
         trendData.push({ month: label, income: Math.round(mIncome * 100) / 100, expense: Math.round(mExpense * 100) / 100 });
       }
       setMonthlyTrend(trendData);
     } catch (err) {
       console.error(err);
-      setError("Error al cargar datos.");
+      setError("Error al cargar datos del dashboard.");
     } finally {
       setLoading(false);
     }
@@ -93,125 +132,214 @@ export default function DashboardPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+  if (loading) return <Spinner fullPage />;
+
+  const balance = monthlyIncome - monthlyExpense;
+  const savingsRate = monthlyIncome > 0 ? ((balance / monthlyIncome) * 100) : 0;
+
+  const tooltipStyle = {
+    backgroundColor: "#0e1827",
+    border: "1px solid #1a2535",
+    borderRadius: "10px",
+    color: "#e2e8f0",
+    fontSize: "12px",
+  };
 
   return (
-    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto">
+    <div className="p-4 lg:p-6 space-y-4 max-w-5xl mx-auto">
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Dashboard</h1>
-        <select
-          value={period}
-          onChange={(e) => setPeriod(e.target.value as any)}
-          className="bg-surface border border-surface-light rounded-lg px-3 py-1.5 text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
-        >
-          <option value="1m">1 mes</option>
-          <option value="3m">3 meses</option>
-          <option value="6m">6 meses</option>
-          <option value="12m">12 meses</option>
-        </select>
+        <div>
+          <h1 className="text-xl font-bold text-text">Dashboard</h1>
+          <p className="text-sm text-text-muted">Resumen financiero</p>
+        </div>
+        <div className="flex items-center gap-1 bg-surface border border-surface-light/60 rounded-xl p-1">
+          {(["1m", "3m", "6m", "12m"] as Period[]).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                period === p ? "bg-primary/15 text-primary" : "text-text-muted hover:text-text"
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && (
-        <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>
+        <div className="bg-danger/10 border border-danger/20 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-surface rounded-xl p-4">
-          <p className="text-text-muted text-xs uppercase tracking-wide">Patrimonio Neto</p>
-          <p className="text-2xl font-bold text-primary mt-1">{formatCurrency(netWorth)}</p>
+      {/* Net Worth Hero Card */}
+      <Card className="relative overflow-hidden bg-gradient-to-br from-surface to-surface-elevated">
+        <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full -translate-y-1/2 translate-x-1/2 pointer-events-none" />
+        <div className="relative">
+          <p className="text-xs font-semibold text-text-muted/70 uppercase tracking-widest mb-2">Patrimonio Neto</p>
+          <p className="text-4xl font-bold text-primary tracking-tight">{formatCurrency(netWorth)}</p>
+          <p className="text-sm text-text-muted mt-2">Cuentas activas en USD / USDT</p>
         </div>
-        <div className="bg-surface rounded-xl p-4">
-          <p className="text-text-muted text-xs uppercase tracking-wide">Balance del período</p>
-          <p className={`text-2xl font-bold mt-1 ${monthlyIncome - monthlyExpense >= 0 ? "text-secondary" : "text-danger"}`}>
-            {formatCurrency(monthlyIncome - monthlyExpense)}
-          </p>
-        </div>
-        <div className="bg-surface rounded-xl p-4">
-          <p className="text-text-muted text-xs uppercase tracking-wide">Ingresos</p>
-          <p className="text-2xl font-bold text-secondary mt-1">{formatCurrency(monthlyIncome)}</p>
-        </div>
-        <div className="bg-surface rounded-xl p-4">
-          <p className="text-text-muted text-xs uppercase tracking-wide">Gastos</p>
-          <p className="text-2xl font-bold text-danger mt-1">{formatCurrency(monthlyExpense)}</p>
-        </div>
+      </Card>
+
+      {/* 3 metric cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <MetricCard label="Ingresos" value={monthlyIncome} colorClass="text-primary" />
+        <MetricCard label="Gastos" value={monthlyExpense} colorClass="text-danger" />
+        <MetricCard
+          label="Balance"
+          value={balance}
+          colorClass={balance >= 0 ? "text-primary" : "text-danger"}
+        />
       </div>
 
-      <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Ingresos vs Gastos</h2>
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={monthlyTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="month" stroke="#94a3b8" fontSize={11} />
-              <YAxis stroke="#94a3b8" fontSize={11} />
-              <Tooltip contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", borderRadius: "8px", color: "#f8fafc" }} formatter={(value: number) => formatCurrency(value)} />
-              <Bar dataKey="income" name="Ingresos" fill="#10b981" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="expense" name="Gastos" fill="#ef4444" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {categoryData.length > 0 && (
-        <div className="bg-surface rounded-xl p-4">
-          <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Gastos por Categoría</h2>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={categoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={40} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                  {categoryData.map((_, idx) => (
-                    <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
-              </PieChart>
-            </ResponsiveContainer>
+      {/* Savings rate pill */}
+      {monthlyIncome > 0 && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-surface border border-surface-light/60 rounded-xl">
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-text-muted uppercase tracking-wide">Tasa de ahorro del período</span>
+              <span className={`text-xs font-bold ${savingsRate >= 20 ? "text-primary" : savingsRate >= 0 ? "text-warning" : "text-danger"}`}>
+                {savingsRate.toFixed(1)}%
+              </span>
+            </div>
+            <div className="h-1.5 bg-surface-light rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${savingsRate >= 20 ? "bg-primary" : savingsRate >= 0 ? "bg-warning" : "bg-danger"}`}
+                style={{ width: `${Math.min(100, Math.max(0, savingsRate))}%` }}
+              />
+            </div>
           </div>
         </div>
       )}
 
-      <div className="bg-surface rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide">Últimas Transacciones</h2>
-          <Link to="/transactions" className="text-xs text-primary hover:underline">Ver todas</Link>
-        </div>
-        <div className="space-y-2">
-          {recentTxs.length === 0 && <p className="text-text-muted text-sm text-center py-4">No hay transacciones</p>}
-          {recentTxs.slice(0, 10).map((tx: any) => {
-            const amount = parseFloat(tx.amount || "0");
-            const isNegative = tx.type === "withdrawal";
-            const currency = tx.currency || "USD";
-            const isVES = currency === "VES";
-            return (
-              <div key={tx.id} className="flex items-center justify-between py-2 border-b border-surface-light last:border-0">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{tx.description || "Sin descripción"}</p>
-                  <p className="text-xs text-text-muted">
-                    {tx.date}
-                    {tx.category_name && ` · ${tx.category_name}`}
-                  </p>
+      {/* Charts row */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        {/* Bar chart */}
+        <Card className="lg:col-span-3">
+          <CardHeader>
+            <CardTitle>Ingresos vs Gastos</CardTitle>
+          </CardHeader>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyTrend} barSize={16} barCategoryGap="30%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a2535" vertical={false} />
+                <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(value: number) => formatCurrency(value)}
+                  cursor={{ fill: "#1a2535", radius: 6 }}
+                />
+                <Bar dataKey="income" name="Ingresos" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="expense" name="Gastos" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        {/* Pie chart */}
+        {categoryData.length > 0 ? (
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Por categoría</CardTitle>
+            </CardHeader>
+            <div className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={categoryData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={72}
+                    innerRadius={40}
+                    paddingAngle={2}
+                  >
+                    {categoryData.map((_, idx) => (
+                      <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(value: number) => formatCurrency(value)}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            {/* Legend */}
+            <div className="mt-2 space-y-1 max-h-24 overflow-y-auto">
+              {categoryData.slice(0, 5).map((cat, idx) => (
+                <div key={cat.name} className="flex items-center gap-2 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PIE_COLORS[idx % PIE_COLORS.length] }} />
+                  <span className="text-text-muted truncate flex-1">{cat.name}</span>
+                  <span className="text-text font-medium shrink-0">{formatCurrency(cat.value)}</span>
                 </div>
-                <div className="text-right ml-3">
-                  <span className={`text-sm font-semibold block ${isNegative ? "text-danger" : "text-secondary"}`}>
-                    {isNegative ? "-" : "+"}{formatCurrency(Math.abs(amount), currency)}
-                  </span>
-                  {isVES && (
-                    <span className="text-[10px] text-text-muted block">
-                      ≈ {formatCurrency(tx.amount_usd || 0)}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              ))}
+            </div>
+          </Card>
+        ) : (
+          <Card className="lg:col-span-2 flex items-center justify-center">
+            <p className="text-sm text-text-muted text-center">Sin gastos categorizados en el período</p>
+          </Card>
+        )}
       </div>
+
+      {/* Recent transactions */}
+      <Card padding="none">
+        <div className="px-5 py-4 border-b border-surface-light/60 flex items-center justify-between">
+          <CardTitle>Últimas transacciones</CardTitle>
+          <Link to="/transactions" className="text-xs text-primary hover:text-primary-dark font-medium transition-colors">
+            Ver todas →
+          </Link>
+        </div>
+        <div className="divide-y divide-surface-light/40">
+          {recentTxs.length === 0 ? (
+            <div className="py-10 text-center">
+              <p className="text-text-muted text-sm">No hay transacciones en el período</p>
+            </div>
+          ) : (
+            recentTxs.map((tx: any) => {
+              const amount = parseFloat(tx.amount || "0");
+              const isNegative = tx.type === "withdrawal";
+              const isTransfer = tx.type === "transfer";
+              const currency = tx.currency || "USD";
+              return (
+                <div key={tx.id} className="flex items-center gap-3 px-5 py-3.5 hover:bg-surface-elevated/50 transition-colors">
+                  {/* Type indicator */}
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                    isTransfer ? "bg-transfer/10" : isNegative ? "bg-danger/10" : "bg-primary/10"
+                  }`}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d={
+                        isTransfer ? "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" :
+                        isNegative ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M19 12l-7 7-7-7"
+                      } />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-text truncate">{tx.description || "Sin descripción"}</p>
+                    <p className="text-xs text-text-muted mt-0.5">
+                      {tx.date}
+                      {tx.category_name && <span> · {tx.category_name}</span>}
+                      {tx.source_name && !isTransfer && <span> · {tx.source_name}</span>}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className={`text-sm font-semibold ${isNegative ? "text-danger" : isTransfer ? "text-transfer" : "text-primary"}`}>
+                      {isTransfer ? "±" : isNegative ? "−" : "+"}{formatCurrency(Math.abs(amount), currency)}
+                    </p>
+                    {currency !== "USD" && currency !== "USDT" && tx.amount_usd != null && (
+                      <p className="text-[11px] text-text-muted">≈ {formatCurrency(tx.amount_usd)}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </Card>
     </div>
   );
 }

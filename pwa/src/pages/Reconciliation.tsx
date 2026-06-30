@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/db';
 import { formatCurrency } from '@/lib/utils';
+import { Card, CardTitle } from '@/components/ui/Card';
+import { Spinner } from '@/components/ui/Spinner';
 import type { AccountAcquisition, ExchangeRate } from '@/types';
 
 interface AccountBreakdown {
@@ -148,24 +150,18 @@ export default function ReconciliationPage() {
   const gap = totalUsdAccounts - totalJarsUsd;
   const gapAfterRate = totalUsdCost - totalJarsUsd;
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+  if (loading) return <Spinner fullPage />;
 
   return (
-    <div className="p-4 space-y-4 max-w-lg lg:max-w-4xl mx-auto pb-24">
+    <div className="p-4 lg:p-6 space-y-4 max-w-lg lg:max-w-4xl pb-24">
       <h1 className="text-xl font-bold">Conciliación</h1>
 
       {error && (
-        <div className="bg-danger/10 border border-danger/30 rounded-lg px-4 py-3 text-sm text-danger">{error}</div>
+        <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>
       )}
 
-      <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Resumen General</h2>
+      <Card>
+        <CardTitle className="mb-3">Resumen General</CardTitle>
         <div className="space-y-2">
           <div className="flex justify-between text-lg">
             <span className="text-text-muted">Cuentas disponibles</span>
@@ -185,12 +181,12 @@ export default function ReconciliationPage() {
             </span>
           </div>
         </div>
-      </div>
+      </Card>
 
-      <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Análisis de la Diferencia</h2>
+      <Card>
+        <CardTitle className="mb-3">Análisis de la Diferencia</CardTitle>
         <div className="space-y-3">
-          <div className="bg-background rounded-lg p-3">
+          <div className="bg-background rounded-xl p-3">
             <div className="flex justify-between text-sm mb-1">
               <span>Cuentas al costo histórico USD</span>
               <span className="font-medium">{formatCurrency(totalUsdCost)}</span>
@@ -215,7 +211,7 @@ export default function ReconciliationPage() {
 
           <hr className="border-surface-light" />
 
-          <div className="bg-background rounded-lg p-3 space-y-2">
+          <div className="bg-background rounded-xl p-3 space-y-2">
             <p className="text-sm font-semibold mb-2">Diagnóstico</p>
             {Math.abs(gap) < 1 && (
               <div className="flex items-center gap-2 text-secondary text-sm">
@@ -242,10 +238,10 @@ export default function ReconciliationPage() {
             )}
           </div>
         </div>
-      </div>
+      </Card>
 
-      <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Cuentas Disponibles</h2>
+      <Card>
+        <CardTitle className="mb-3">Cuentas Disponibles</CardTitle>
         <div className="space-y-3">
           {usdAccounts.map((acc) => {
             const isVES = acc.currency === 'VES';
@@ -312,10 +308,10 @@ export default function ReconciliationPage() {
             </div>
           )}
         </div>
-      </div>
+      </Card>
 
-      <div className="bg-surface rounded-xl p-4">
-        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">Jarras Asignadas</h2>
+      <Card>
+        <CardTitle className="mb-3">Jarras Asignadas</CardTitle>
         <div className="space-y-2">
           {jars.length === 0 && <p className="text-text-muted text-sm text-center py-2">Sin jarras configuradas</p>}
           {jars.map(jar => (
@@ -333,7 +329,7 @@ export default function ReconciliationPage() {
             </div>
           ))}
         </div>
-      </div>
+      </Card>
 
       <div className="bg-background border border-surface-light rounded-xl p-4 text-xs text-text-muted space-y-2">
         <p className="font-semibold text-text">¿Cómo leer esto?</p>
