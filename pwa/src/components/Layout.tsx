@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/lib/auth-context';
+import { useAppStore } from '@/lib/store';
 
 interface NavItem {
   path: string;
@@ -32,10 +33,30 @@ const bottomOverflow = navItems.slice(4);
 export default function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { initialized, refresh } = useAppStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
   const isActive = (path: string) => location.pathname === path;
+
+  // Safety net: re-sync reference data (accounts, jars, categories, liabilities,
+  // rates) whenever the user switches pages, so a mutation made elsewhere is
+  // never more than one navigation away from being visible.
+  useEffect(() => {
+    if (initialized) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  // PWA on mobile gets backgrounded when the user switches apps — refresh as
+  // soon as it's foregrounded again instead of showing whatever was cached
+  // in memory before the suspension.
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible' && initialized) void refresh();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [initialized, refresh]);
 
   return (
     <div className="flex min-h-screen bg-background">
