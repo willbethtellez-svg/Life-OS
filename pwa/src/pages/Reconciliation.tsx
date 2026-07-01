@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, generateId } from '@/lib/utils';
-import { Card, CardHeader, CardTitle, Button, Input, Field } from '@/components/ui';
+import { Card, CardTitle, Button, Input, Field } from '@/components/ui';
 import {
   toUSDClient,
   computeAccountFinalBalance, computeAccountHistoricalUsdBasis,
@@ -87,6 +87,8 @@ function ReconciliationCard({
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
+  const [mismatchOpen, setMismatchOpen] = useState(false);
+
   return (
     <Card>
       <div className="flex items-start justify-between mb-4">
@@ -135,9 +137,25 @@ function ReconciliationCard({
         </div>
       )}
       {result.mismatchLabels.length > 0 && (
-        <div className="bg-danger/10 border border-danger/30 rounded-xl p-3">
-          <p className="text-xs font-medium text-danger mb-1">⚠ Saldo incorrecto</p>
-          {result.mismatchLabels.map((l, i) => <p key={i} className="text-[11px] text-text-muted">{l}</p>)}
+        <div className="bg-danger/10 border border-danger/30 rounded-xl overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setMismatchOpen(o => !o)}
+            className="w-full flex items-center justify-between px-3 py-2 text-left"
+          >
+            <p className="text-xs font-medium text-danger">⚠ Saldo incorrecto ({result.mismatchLabels.length})</p>
+            <svg
+              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+              className={`text-danger transition-transform shrink-0 ${mismatchOpen ? 'rotate-180' : ''}`}
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+          {mismatchOpen && (
+            <div className="px-3 pb-3 space-y-1">
+              {result.mismatchLabels.map((l, i) => <p key={i} className="text-[11px] text-text-muted">{l}</p>)}
+            </div>
+          )}
         </div>
       )}
     </Card>
@@ -185,6 +203,12 @@ export default function Reconciliation() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Ajuste de conciliación (cuentas)
+  const [adjustAccount, setAdjustAccount] = useState<Account | null>(null);
+  const [adjustReal, setAdjustReal] = useState('');
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [adjustError, setAdjustError] = useState('');
+
   async function loadAll() {
     setLoading(true);
     const [txs, gs] = await Promise.all([
@@ -200,6 +224,69 @@ export default function Reconciliation() {
 
   async function handleRefresh() {
     await Promise.all([refresh(), loadAll()]);
+  }
+
+  function openAdjust(acc: Account) {
+    setAdjustAccount(acc);
+    setAdjustReal('');
+    setAdjustError('');
+  }
+
+  function closeAdjust() {
+    setAdjustAccount(null);
+    setAdjustReal('');
+    setAdjustError('');
+  }
+
+  // Crea una transacción de ajuste ("Ajuste de conciliación") por la diferencia
+  // entre el saldo real que el usuario observa físicamente y el saldo calculado
+  // desde el libro contable. Al pasar por el flujo normal de creación, la misma
+  // transacción actualiza current_balance (vía RPC) y queda reflejada en el
+  // saldo calculado — ambos números quedan iguales, con rastro auditable.
+  async function handleAdjustSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!adjustAccount) return;
+    const real = parseFloat(adjustReal);
+    if (isNaN(real)) {
+      setAdjustError('Ingresa un monto válido');
+      return;
+    }
+    const txs = allTxs.filter(t => t.source_account_id === adjustAccount.id || t.destination_account_id === adjustAccount.id);
+    const calculado = computeAccountFinalBalance(adjustAccount, txs);
+    const diff = real - calculado;
+    if (Math.abs(diff) < 0.01) {
+      closeAdjust();
+      return;
+    }
+    setAdjustSaving(true);
+    setAdjustError('');
+    const isDeposit = diff > 0;
+    try {
+      await db.transactions.create({
+        date: new Date().toISOString().split('T')[0],
+        description: 'Ajuste de conciliación',
+        type: isDeposit ? 'deposit' : 'withdrawal',
+        amount: Math.abs(diff),
+        currency: adjustAccount.currency,
+        source_account_id: isDeposit ? null : adjustAccount.id,
+        destination_account_id: isDeposit ? adjustAccount.id : null,
+        category_id: null,
+        piggy_bank_id: null,
+        destination_piggy_bank_id: null,
+        foreign_amount: null,
+        foreign_currency: null,
+        fee: 0,
+        notes: '',
+        confirmed: true,
+        reconciled: true,
+      });
+      closeAdjust();
+      await Promise.all([refresh(), loadAll()]);
+    } catch {
+      setAdjustError('Error al registrar el ajuste');
+    } finally {
+      setAdjustSaving(false);
+    }
   }
 
   const netWorthAccountIds = accounts
@@ -303,22 +390,38 @@ export default function Reconciliation() {
                 <tr className="border-b border-surface-light/40 text-xs text-text-muted">
                   <th className="px-5 py-2 text-left">Cuenta</th>
                   <th className="px-5 py-2 text-left">Tipo</th>
-                  <th className="px-5 py-2 text-right">Saldo</th>
+                  <th className="px-5 py-2 text-right">Guardado</th>
+                  <th className="px-5 py-2 text-right">Calculado</th>
+                  <th className="px-5 py-2 text-right">Diferencia</th>
                   <th className="px-5 py-2 text-right">Eq. USD (hoy)</th>
+                  <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-light/40">
                 {accounts.length === 0 ? (
-                  <tr><td colSpan={4} className="px-5 py-6 text-center text-text-muted">Sin cuentas</td></tr>
+                  <tr><td colSpan={7} className="px-5 py-6 text-center text-text-muted">Sin cuentas</td></tr>
                 ) : accounts.map(a => {
-                  const bal = parseFloat(String(a.current_balance));
-                  const usd = toUSDClient(bal, a.currency, exchangeRates, null);
+                  const stored = parseFloat(String(a.current_balance));
+                  const txs = allTxs.filter(t => t.source_account_id === a.id || t.destination_account_id === a.id);
+                  const calculado = computeAccountFinalBalance(a, txs);
+                  const diff = stored - calculado;
+                  const hasMismatch = Math.abs(diff) > 0.01;
+                  const usd = toUSDClient(calculado, a.currency, exchangeRates, null);
                   return (
                     <tr key={a.id} className="hover:bg-surface-elevated/50">
                       <td className="px-5 py-3 text-text font-medium">{a.name}</td>
                       <td className="px-5 py-3 text-text-muted capitalize">{a.type === 'asset' ? 'Activo' : 'Pasivo'}</td>
-                      <td className="px-5 py-3 text-right font-mono text-text">{formatCurrency(bal, a.currency)}</td>
+                      <td className="px-5 py-3 text-right font-mono text-text-muted">{formatCurrency(stored, a.currency)}</td>
+                      <td className="px-5 py-3 text-right font-mono text-text">{formatCurrency(calculado, a.currency)}</td>
+                      <td className={`px-5 py-3 text-right font-mono ${hasMismatch ? 'text-danger' : 'text-text-muted'}`}>
+                        {formatCurrency(diff, a.currency)}
+                      </td>
                       <td className="px-5 py-3 text-right font-mono text-text-muted">{formatCurrency(usd)}</td>
+                      <td className="px-3 py-3 text-right">
+                        {hasMismatch && (
+                          <Button size="sm" variant="warning" onClick={() => openAdjust(a)}>Ajustar</Button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -333,7 +436,7 @@ export default function Reconciliation() {
               <thead>
                 <tr className="border-b border-surface-light/40 text-xs text-text-muted">
                   <th className="px-5 py-2 text-left">Jarra</th>
-                  <th className="px-5 py-2 text-right">Ahorrado</th>
+                  <th className="px-5 py-2 text-right">Ahorrado (calculado)</th>
                   <th className="px-5 py-2 text-right">Meta</th>
                   <th className="px-5 py-2 text-right">Eq. USD (hoy)</th>
                 </tr>
@@ -342,13 +445,14 @@ export default function Reconciliation() {
                 {jars.length === 0 ? (
                   <tr><td colSpan={4} className="px-5 py-6 text-center text-text-muted">Sin jarras</td></tr>
                 ) : jars.map(j => {
-                  const current = parseFloat(String(j.current_amount));
+                  const txs = allTxs.filter(t => t.piggy_bank_id === j.id || t.destination_piggy_bank_id === j.id);
+                  const calculado = computeJarFinalBalance(j, txs, exchangeRates);
                   const target = parseFloat(String(j.target_amount));
-                  const usd = toUSDClient(current, j.currency, exchangeRates, null);
+                  const usd = toUSDClient(calculado, j.currency, exchangeRates, null);
                   return (
                     <tr key={j.id} className="hover:bg-surface-elevated/50">
                       <td className="px-5 py-3 text-text font-medium">{j.name}</td>
-                      <td className="px-5 py-3 text-right font-mono text-secondary">{formatCurrency(current, j.currency)}</td>
+                      <td className="px-5 py-3 text-right font-mono text-secondary">{formatCurrency(calculado, j.currency)}</td>
                       <td className="px-5 py-3 text-right font-mono text-text-muted">{formatCurrency(target, j.currency)}</td>
                       <td className="px-5 py-3 text-right font-mono text-text-muted">{formatCurrency(usd)}</td>
                     </tr>
@@ -469,6 +573,45 @@ export default function Reconciliation() {
           </div>
         </div>
       )}
+
+      {/* Ajuste de conciliación */}
+      {adjustAccount && (() => {
+        const txs = allTxs.filter(t => t.source_account_id === adjustAccount.id || t.destination_account_id === adjustAccount.id);
+        const calculado = computeAccountFinalBalance(adjustAccount, txs);
+        const real = parseFloat(adjustReal);
+        const diff = !isNaN(real) ? real - calculado : null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-end lg:items-center justify-center">
+            <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={closeAdjust} />
+            <div className="relative w-full lg:max-w-sm bg-surface rounded-t-2xl lg:rounded-2xl border border-surface-light/60 p-5 z-10">
+              <div className="w-10 h-1 bg-surface-light rounded-full mx-auto mb-5 lg:hidden" />
+              <h2 className="text-base font-semibold text-text mb-1">Ajustar "{adjustAccount.name}"</h2>
+              <p className="text-xs text-text-muted mb-4">
+                Saldo calculado actual: <span className="font-mono">{formatCurrency(calculado, adjustAccount.currency)}</span>
+              </p>
+              {adjustError && <div className="bg-danger/10 border border-danger/30 rounded-xl px-3 py-2 text-sm text-danger mb-3">{adjustError}</div>}
+              <form onSubmit={handleAdjustSubmit} className="space-y-4">
+                <Field label="Saldo real observado">
+                  <Input type="number" step="any" value={adjustReal} onChange={e => setAdjustReal(e.target.value)} placeholder="0.00" required autoFocus />
+                </Field>
+                {diff !== null && Math.abs(diff) >= 0.01 && (
+                  <p className="text-xs text-text-muted">
+                    Se registrará un ajuste de{' '}
+                    <span className={diff > 0 ? 'text-secondary' : 'text-danger'}>
+                      {diff > 0 ? '+' : ''}{formatCurrency(diff, adjustAccount.currency)}
+                    </span>
+                    {' '}como {diff > 0 ? 'ingreso' : 'gasto'} en el libro contable.
+                  </p>
+                )}
+                <div className="flex gap-3 pt-1">
+                  <Button variant="outline" className="flex-1" onClick={closeAdjust} type="button">Cancelar</Button>
+                  <Button type="submit" loading={adjustSaving} className="flex-1">Registrar ajuste</Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
