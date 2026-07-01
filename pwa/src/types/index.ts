@@ -117,6 +117,15 @@ export interface ExchangeRate {
   created_at: string;
 }
 
+export interface ReconciliationGroup {
+  id: string;
+  user_id: string;
+  name: string;
+  account_ids: string[];
+  jar_ids: string[];
+  created_at: string;
+}
+
 export interface AccountAcquisition {
   id: string;
   user_id: string;

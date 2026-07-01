@@ -3,6 +3,7 @@ import type {
   Account, Transaction, Category, Budget, PiggyBank, Liability,
   ExchangeRate, AccountAcquisition, HouseholdTask, MaintenanceLog,
   VehicleRecord, BabyRecord, PendingTransaction, LiabilityMovement,
+  ReconciliationGroup,
 } from '@/types';
 
 async function getUser() {
@@ -629,6 +630,30 @@ export const db = {
         .single();
       if (error) throw error;
       return data;
+    },
+  },
+
+  // ─── RECONCILIATION GROUPS ─────────────────────────────────
+  reconciliationGroups: {
+    list: async (): Promise<ReconciliationGroup[]> => {
+      const { data, error } = await supabase.from('reconciliation_groups').select('*').order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    create: async (group: { name: string; account_ids: string[]; jar_ids: string[] }): Promise<ReconciliationGroup> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('reconciliation_groups').insert({ ...group, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    update: async (id: string, updates: { name: string; account_ids: string[]; jar_ids: string[] }): Promise<ReconciliationGroup> => {
+      const { data, error } = await supabase.from('reconciliation_groups').update(updates).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('reconciliation_groups').delete().eq('id', id);
+      if (error) throw error;
     },
   },
 

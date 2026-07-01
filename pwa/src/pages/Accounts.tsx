@@ -3,61 +3,11 @@ import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
 import { Card, CardHeader, CardTitle, Button, Input, Select, Field, Badge } from '@/components/ui';
+import { buildAccountEntries, computeAccountFinalBalance } from '@/lib/ledger';
 import type { Account, CurrencyCode, Transaction } from '@/types';
 
 const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
 const ACC_TYPES = [{ value: 'asset', label: 'Activo' }, { value: 'liability', label: 'Pasivo' }];
-
-const typeLabelEs: Record<string, string> = { withdrawal: 'gasto', deposit: 'ingreso', transfer: 'transferencia' };
-
-// Una sola fuente de verdad para el saldo: arranca en initial_balance y
-// recorre los movimientos reales. La comisión de cada transacción se modela
-// como un renglón aparte ("Comisión de ...") que sale de la cuenta que
-// originó el movimiento, en vez de mezclarse silenciosamente en el monto.
-interface LedgerEntry {
-  key: string;
-  date: string;
-  description: string;
-  amount: number;
-  isDebit: boolean;
-  isFee: boolean;
-}
-
-function buildAccountEntries(accountId: string, txs: Transaction[]): LedgerEntry[] {
-  const entries: LedgerEntry[] = [];
-  for (const tx of txs) {
-    const isSource = tx.source_account_id === accountId;
-    const isDest = tx.destination_account_id === accountId;
-    if (isSource) {
-      entries.push({ key: tx.id, date: tx.date, description: tx.description, amount: parseFloat(String(tx.amount)), isDebit: true, isFee: false });
-    } else if (isDest) {
-      const amt = parseFloat(String(tx.foreign_amount ?? tx.amount));
-      entries.push({ key: tx.id, date: tx.date, description: tx.description, amount: amt, isDebit: false, isFee: false });
-    }
-    const fee = parseFloat(String(tx.fee || 0));
-    if (fee > 0) {
-      const feeAccountId = tx.source_account_id || tx.destination_account_id;
-      if (feeAccountId === accountId) {
-        entries.push({
-          key: `${tx.id}-fee`,
-          date: tx.date,
-          description: `Comisión de "${tx.description || typeLabelEs[tx.type] || tx.type}"`,
-          amount: fee,
-          isDebit: true,
-          isFee: true,
-        });
-      }
-    }
-  }
-  return entries;
-}
-
-function computeFinalBalance(account: Account, txs: Transaction[]): number {
-  const entries = buildAccountEntries(account.id, txs);
-  let bal = parseFloat(String(account.initial_balance));
-  for (const e of entries) bal += e.isDebit ? -e.amount : e.amount;
-  return bal;
-}
 
 interface AccForm {
   name: string;
@@ -100,7 +50,7 @@ export default function Accounts() {
     (async () => {
       const entries = await Promise.all(accounts.map(async (acc) => {
         const txs = await db.accounts.transactions(acc.id);
-        return [acc.id, computeFinalBalance(acc, txs)] as const;
+        return [acc.id, computeAccountFinalBalance(acc, txs)] as const;
       }));
       if (!cancelled) setBalances(Object.fromEntries(entries));
     })();
