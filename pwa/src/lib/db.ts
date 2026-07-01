@@ -3,7 +3,7 @@ import type {
   Account, Transaction, Category, Budget, PiggyBank, Liability,
   ExchangeRate, AccountAcquisition, HouseholdTask, MaintenanceLog,
   VehicleRecord, BabyRecord, PendingTransaction, LiabilityMovement,
-  ReconciliationGroup,
+  ReconciliationGroup, DistributionTemplate, DistributionTemplateItem,
 } from '@/types';
 
 async function getUser() {
@@ -653,6 +653,30 @@ export const db = {
     },
     delete: async (id: string): Promise<void> => {
       const { error } = await supabase.from('reconciliation_groups').delete().eq('id', id);
+      if (error) throw error;
+    },
+  },
+
+  // ─── DISTRIBUTION TEMPLATES ────────────────────────────────
+  distributionTemplates: {
+    list: async (): Promise<DistributionTemplate[]> => {
+      const { data, error } = await supabase.from('distribution_templates').select('*').order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    create: async (tpl: { name: string; source_jar_id: string | null; items: DistributionTemplateItem[] }): Promise<DistributionTemplate> => {
+      const user = await getUser();
+      const { data, error } = await supabase.from('distribution_templates').insert({ ...tpl, user_id: user?.id }).select().single();
+      if (error) throw error;
+      return data;
+    },
+    update: async (id: string, updates: { name: string; source_jar_id: string | null; items: DistributionTemplateItem[] }): Promise<DistributionTemplate> => {
+      const { data, error } = await supabase.from('distribution_templates').update(updates).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    delete: async (id: string): Promise<void> => {
+      const { error } = await supabase.from('distribution_templates').delete().eq('id', id);
       if (error) throw error;
     },
   },

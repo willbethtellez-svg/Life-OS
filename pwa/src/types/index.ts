@@ -126,6 +126,21 @@ export interface ReconciliationGroup {
   created_at: string;
 }
 
+export interface DistributionTemplateItem {
+  description: string;
+  destination_jar_id: string;
+  default_amount: number;
+}
+
+export interface DistributionTemplate {
+  id: string;
+  user_id: string;
+  name: string;
+  source_jar_id: string | null;
+  items: DistributionTemplateItem[];
+  created_at: string;
+}
+
 export interface AccountAcquisition {
   id: string;
   user_id: string;

@@ -3,6 +3,7 @@ import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
 import { Card, Button, Input, Select, Field } from '@/components/ui';
+import DistributionModal from '@/components/DistributionModal';
 import type { Transaction, CurrencyCode, TransactionType } from '@/types';
 
 const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
@@ -51,6 +52,7 @@ export default function Transactions() {
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [showDistribution, setShowDistribution] = useState(false);
   const [editTx, setEditTx] = useState<Transaction | null>(null);
   const [form, setForm] = useState<TxForm>(emptyForm());
   const [saving, setSaving] = useState(false);
@@ -278,10 +280,16 @@ export default function Transactions() {
     <div className="p-4 lg:p-6 max-w-5xl mx-auto space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-text">Transacciones</h1>
-        <Button onClick={openCreate}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
-          Nueva
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowDistribution(true)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /><path d="M12 8v8m-4-4h8" /></svg>
+            Distribución
+          </Button>
+          <Button onClick={openCreate}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
+            Nueva
+          </Button>
+        </div>
       </div>
 
       {error && <div className="bg-danger/10 border border-danger/30 rounded-xl px-4 py-3 text-sm text-danger">{error}</div>}
@@ -592,6 +600,8 @@ export default function Transactions() {
           </div>
         </div>
       )}
+
+      {showDistribution && <DistributionModal onClose={() => setShowDistribution(false)} />}
     </div>
   );
 }
