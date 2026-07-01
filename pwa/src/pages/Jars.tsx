@@ -29,23 +29,72 @@ function usdToCurrencyClient(amountUsd: number, currency: string, rates: Exchang
   return amountUsd * rate;
 }
 
-// El monto USD de cada movimiento viene directo de tx.amount_usd (ya calculado y
-// persistido server-side con la tasa del día), así que es siempre el valor real
-// del movimiento sin importar en qué moneda se registró la transacción. El monto
-// nativo se muestra solo como referencia pequeña en el libro contable.
-function getTxAmount(tx: Transaction, jarId: string): { amountUsd: number; isIn: boolean; nativeAmount: number; nativeCurrency: string } {
-  const isDestJar = tx.destination_piggy_bank_id === jarId;
-  const isSrcJar = tx.piggy_bank_id === jarId;
-  const amountUsd = parseFloat(String(tx.amount_usd ?? 0));
-  if (tx.type === 'deposit' && isSrcJar) return { amountUsd, isIn: true, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
-  if (tx.type === 'withdrawal' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
-  if (tx.type === 'transfer' && isSrcJar) return { amountUsd, isIn: false, nativeAmount: parseFloat(String(tx.amount)), nativeCurrency: tx.currency };
-  if (tx.type === 'transfer' && isDestJar) {
-    const nativeAmount = tx.foreign_amount != null ? parseFloat(String(tx.foreign_amount)) : parseFloat(String(tx.amount));
-    const nativeCurrency = tx.foreign_currency || tx.currency;
-    return { amountUsd, isIn: true, nativeAmount, nativeCurrency };
+const jarTypeLabelEs: Record<string, string> = { withdrawal: 'gasto', deposit: 'ingreso', transfer: 'transferencia' };
+
+interface JarLedgerEntry {
+  key: string;
+  date: string;
+  description: string;
+  amountUsd: number;
+  nativeAmount: number;
+  nativeCurrency: string;
+  isIn: boolean;
+  isFee: boolean;
+}
+
+// Genera todas las entradas de una transacción para una jarra dada. Una
+// transferencia cuya jarra de origen y destino son la MISMA jarra (uso común:
+// "mover" dinero entre cuentas dejando constancia solo de la comisión) debe
+// producir DOS entradas — la salida y la vuelta a entrar — no solo una; antes
+// se usaba un if/return secuencial que devolvía la primera rama que aplicara,
+// por lo que la entrada nunca se veía en ese caso. El monto USD de cada
+// movimiento viene directo de tx.amount_usd (ya calculado y persistido
+// server-side con la tasa del día); el monto nativo se muestra solo como
+// referencia pequeña en el libro contable.
+function buildJarEntries(jarId: string, txs: Transaction[]): JarLedgerEntry[] {
+  const entries: JarLedgerEntry[] = [];
+  for (const tx of txs) {
+    const isSrcJar = tx.piggy_bank_id === jarId;
+    const isDestJar = tx.destination_piggy_bank_id === jarId;
+    const amountUsd = parseFloat(String(tx.amount_usd ?? 0));
+    const nativeAmount = parseFloat(String(tx.amount));
+    const nativeCurrency = tx.currency;
+
+    if (tx.type === 'deposit' && isSrcJar) {
+      entries.push({ key: tx.id, date: tx.date, description: tx.description, amountUsd, nativeAmount, nativeCurrency, isIn: true, isFee: false });
+    }
+    if (tx.type === 'withdrawal' && isSrcJar) {
+      entries.push({ key: tx.id, date: tx.date, description: tx.description, amountUsd, nativeAmount, nativeCurrency, isIn: false, isFee: false });
+    }
+    if (tx.type === 'transfer') {
+      if (isSrcJar) {
+        entries.push({ key: `${tx.id}-out`, date: tx.date, description: tx.description, amountUsd, nativeAmount, nativeCurrency, isIn: false, isFee: false });
+      }
+      if (isDestJar) {
+        const destNativeAmount = tx.foreign_amount != null ? parseFloat(String(tx.foreign_amount)) : nativeAmount;
+        const destNativeCurrency = tx.foreign_currency || tx.currency;
+        entries.push({ key: `${tx.id}-in`, date: tx.date, description: tx.description, amountUsd, nativeAmount: destNativeAmount, nativeCurrency: destNativeCurrency, isIn: true, isFee: false });
+      }
+    }
+
+    // La comisión sale de la jarra referenciada como origen (piggy_bank_id),
+    // igual que en el libro contable de cuentas — nunca de la jarra destino.
+    const fee = parseFloat(String(tx.fee || 0));
+    if (fee > 0 && isSrcJar) {
+      const unitUsdRate = nativeAmount > 0 ? amountUsd / nativeAmount : 0;
+      entries.push({
+        key: `${tx.id}-fee`,
+        date: tx.date,
+        description: `Comisión de "${tx.description || jarTypeLabelEs[tx.type] || tx.type}"`,
+        amountUsd: fee * unitUsdRate,
+        nativeAmount: fee,
+        nativeCurrency,
+        isIn: false,
+        isFee: true,
+      });
+    }
   }
-  return { amountUsd: 0, isIn: true, nativeAmount: 0, nativeCurrency: 'USD' };
+  return entries;
 }
 
 // Saldo en la moneda propia de la jarra: arranca en initial_amount (ya está en
@@ -54,10 +103,9 @@ function getTxAmount(tx: Transaction, jarId: string): { amountUsd: number; isIn:
 // alimenta el libro contable, para que nunca haya dos cifras distintas.
 function computeJarFinalBalance(jar: PiggyBank, txs: Transaction[], rates: ExchangeRate[]): number {
   let bal = parseFloat(String(jar.initial_amount ?? 0));
-  for (const tx of txs) {
-    const { amountUsd, isIn } = getTxAmount(tx, jar.id);
-    const native = usdToCurrencyClient(amountUsd, jar.currency, rates, tx.date);
-    bal += isIn ? native : -native;
+  for (const e of buildJarEntries(jar.id, txs)) {
+    const native = usdToCurrencyClient(e.amountUsd, jar.currency, rates, e.date);
+    bal += e.isIn ? native : -native;
   }
   return bal;
 }
@@ -199,21 +247,17 @@ export default function Jars() {
     setLedgerLoading(false);
   }
 
-  function computeRunningBalanceUSD(index: number, txList: Transaction[]): number {
-    if (!ledger) return 0;
+  const displayEntries = ledger ? (() => {
+    const sorted = [...txHistory].sort((a, b) =>
+      sortOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
+    );
     const initialDate = ledger.start_date || ledger.created_at?.split('T')[0] || null;
-    const initial = toUSDClient(parseFloat(String(ledger.initial_amount ?? 0)), ledger.currency, exchangeRates, initialDate);
-    let bal = initial;
-    for (let i = 0; i <= index; i++) {
-      const { amountUsd, isIn } = getTxAmount(txList[i], ledger.id);
-      bal += isIn ? amountUsd : -amountUsd;
-    }
-    return bal;
-  }
-
-  const displayTxs = [...txHistory].sort((a, b) =>
-    sortOrder === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)
-  );
+    let bal = toUSDClient(parseFloat(String(ledger.initial_amount ?? 0)), ledger.currency, exchangeRates, initialDate);
+    return buildJarEntries(ledger.id, sorted).map(e => {
+      bal += e.isIn ? e.amountUsd : -e.amountUsd;
+      return { ...e, runningBalanceUsd: bal };
+    });
+  })() : [];
 
   // ── Ledger view ──────────────────────────────────────────────
   if (ledger) {
@@ -297,32 +341,30 @@ export default function Jars() {
                     )}
                   </td>
                 </tr>
-                {displayTxs.map((tx, i) => {
-                  const { amountUsd, isIn, nativeAmount, nativeCurrency } = getTxAmount(tx, ledger.id);
-                  const runBal = computeRunningBalanceUSD(i, displayTxs);
-                  const showRef = nativeCurrency !== 'USD';
+                {displayEntries.map(e => {
+                  const showRef = e.nativeCurrency !== 'USD';
                   return (
-                    <tr key={tx.id} className="hover:bg-surface-elevated/50">
-                      <td className="px-5 py-3 text-text-muted">{formatDate(tx.date)}</td>
-                      <td className="px-5 py-3 text-text">{tx.description || '—'}</td>
+                    <tr key={e.key} className={`hover:bg-surface-elevated/50 ${e.isFee ? 'opacity-70' : ''}`}>
+                      <td className="px-5 py-3 text-text-muted">{formatDate(e.date)}</td>
+                      <td className="px-5 py-3 text-text">{e.description || '—'}</td>
                       <td className="px-5 py-3 text-right font-mono text-secondary">
-                        {isIn && (
+                        {e.isIn && (
                           <>
-                            <p>{formatCurrency(amountUsd, 'USD')}</p>
-                            {showRef && <p className="text-[10px] text-secondary/70">{formatCurrency(nativeAmount, nativeCurrency)}</p>}
+                            <p>{formatCurrency(e.amountUsd, 'USD')}</p>
+                            {showRef && <p className="text-[10px] text-secondary/70">{formatCurrency(e.nativeAmount, e.nativeCurrency)}</p>}
                           </>
                         )}
                       </td>
                       <td className="px-5 py-3 text-right font-mono text-danger">
-                        {!isIn && (
+                        {!e.isIn && (
                           <>
-                            <p>{formatCurrency(amountUsd, 'USD')}</p>
-                            {showRef && <p className="text-[10px] text-danger/70">{formatCurrency(nativeAmount, nativeCurrency)}</p>}
+                            <p>{formatCurrency(e.amountUsd, 'USD')}</p>
+                            {showRef && <p className="text-[10px] text-danger/70">{formatCurrency(e.nativeAmount, e.nativeCurrency)}</p>}
                           </>
                         )}
                       </td>
                       <td className="px-5 py-3 text-right font-mono text-text">
-                        {formatCurrency(runBal, 'USD')}
+                        {formatCurrency(e.runningBalanceUsd, 'USD')}
                       </td>
                     </tr>
                   );
@@ -348,27 +390,25 @@ export default function Jars() {
           </Card>
           {ledgerLoading ? (
             <div className="flex justify-center py-10"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
-          ) : displayTxs.map((tx, i) => {
-            const { amountUsd, isIn, nativeAmount, nativeCurrency } = getTxAmount(tx, ledger.id);
-            const runBal = computeRunningBalanceUSD(i, displayTxs);
-            const showRef = nativeCurrency !== 'USD';
+          ) : displayEntries.map(e => {
+            const showRef = e.nativeCurrency !== 'USD';
             return (
-              <Card key={tx.id} padding="sm">
+              <Card key={e.key} padding="sm" className={e.isFee ? 'opacity-70' : ''}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-text">{tx.description || '—'}</p>
-                    <p className="text-xs text-text-muted">{formatDate(tx.date)}</p>
+                    <p className="text-sm font-medium text-text">{e.description || '—'}</p>
+                    <p className="text-xs text-text-muted">{formatDate(e.date)}</p>
                   </div>
                   <div className="text-right">
-                    <p className={`text-sm font-semibold ${isIn ? 'text-secondary' : 'text-danger'}`}>
-                      {isIn ? '+' : '−'}{formatCurrency(amountUsd, 'USD')}
+                    <p className={`text-sm font-semibold ${e.isIn ? 'text-secondary' : 'text-danger'}`}>
+                      {e.isIn ? '+' : '−'}{formatCurrency(e.amountUsd, 'USD')}
                     </p>
                     {showRef && (
-                      <p className={`text-[10px] ${isIn ? 'text-secondary/70' : 'text-danger/70'}`}>
-                        {formatCurrency(nativeAmount, nativeCurrency)}
+                      <p className={`text-[10px] ${e.isIn ? 'text-secondary/70' : 'text-danger/70'}`}>
+                        {formatCurrency(e.nativeAmount, e.nativeCurrency)}
                       </p>
                     )}
-                    <p className="text-xs text-text-muted font-mono">{formatCurrency(runBal, 'USD')}</p>
+                    <p className="text-xs text-text-muted font-mono">{formatCurrency(e.runningBalanceUsd, 'USD')}</p>
                   </div>
                 </div>
               </Card>
