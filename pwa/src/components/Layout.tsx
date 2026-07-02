@@ -65,8 +65,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         {/* Logo */}
         <div className="px-5 py-5 border-b border-surface-light/40">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shrink-0">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+            <div className="w-8 h-8 rounded-xl bg-secondary flex items-center justify-center shrink-0">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" strokeWidth="2.5">
                 <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
               </svg>
             </div>
@@ -152,7 +152,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             {bottomPrimary.map(item => (
               <Link key={item.path} to={item.path}
                 className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-medium transition-colors ${
-                  isActive(item.path) ? 'text-primary' : 'text-text-muted'
+                  isActive(item.path) ? 'text-secondary' : 'text-text-muted'
                 }`}>
                 {item.icon}
                 <span className="truncate max-w-[56px] text-center leading-tight">{item.label.split(' ')[0]}</span>
@@ -162,7 +162,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             {/* Más button */}
             <button onClick={() => setMoreOpen(true)}
               className={`flex-1 flex flex-col items-center justify-center gap-1 text-[10px] font-medium transition-colors ${
-                bottomOverflow.some(i => isActive(i.path)) ? 'text-primary' : 'text-text-muted'
+                bottomOverflow.some(i => isActive(i.path)) ? 'text-secondary' : 'text-text-muted'
               }`}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
                 <circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" />
@@ -184,7 +184,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                     onClick={() => setMoreOpen(false)}
                     className={`flex items-center gap-3 px-4 py-3.5 rounded-xl transition-colors ${
                       isActive(item.path)
-                        ? 'bg-primary/10 text-primary'
+                        ? 'bg-secondary/10 text-secondary'
                         : 'bg-surface-elevated text-text hover:bg-surface-light'
                     }`}>
                     {item.icon}
@@ -205,12 +205,12 @@ function SidebarLink({ item, active, onClick }: { item: NavItem; active: boolean
     <Link to={item.path} onClick={onClick}
       className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
         active
-          ? 'bg-primary/15 text-primary'
+          ? 'bg-secondary/15 text-secondary'
           : 'text-text-muted hover:text-text hover:bg-surface-elevated'
       }`}>
-      <span className={active ? 'text-primary' : ''}>{item.icon}</span>
+      <span className={active ? 'text-secondary' : ''}>{item.icon}</span>
       {item.label}
-      {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary" />}
+      {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-secondary" />}
     </Link>
   );
 }
