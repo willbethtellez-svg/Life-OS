@@ -441,8 +441,8 @@ export default function Transactions() {
       {/* FAB mobile */}
       <button
         onClick={openCreate}
-        className="sm:hidden fixed bottom-20 right-4 w-14 h-14 bg-primary rounded-full flex items-center justify-center text-white z-20"
-        style={{ boxShadow: '0 4px 20px rgba(22,163,74,0.4)' }}
+        className="sm:hidden fixed bottom-20 right-4 w-14 h-14 bg-primary rounded-full flex items-center justify-center text-ink z-20"
+        style={{ boxShadow: '0 4px 20px rgba(251,90,46,0.4)' }}
       >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
       </button>

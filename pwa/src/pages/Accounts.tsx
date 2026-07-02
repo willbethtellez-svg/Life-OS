@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useAppStore } from '@/lib/store';
 import { db } from '@/lib/db';
 import { formatCurrency, formatDate, generateId } from '@/lib/utils';
 import { Card, CardHeader, CardTitle, Button, Input, Select, Field, Badge } from '@/components/ui';
-import { buildAccountEntries, computeAccountFinalBalance } from '@/lib/ledger';
+import { buildAccountEntries } from '@/lib/ledger';
+import { useAccountBalances } from '@/lib/hooks/useAccountBalances';
 import type { Account, CurrencyCode, Transaction } from '@/types';
 
 const CURRENCIES: CurrencyCode[] = ['USD', 'VES', 'EUR', 'BTC', 'USDT'];
@@ -31,7 +32,7 @@ export default function Accounts() {
 
   // Saldos calculados en vivo desde los movimientos reales — la misma función
   // que alimenta el libro contable, para que nunca haya dos cifras distintas.
-  const [balances, setBalances] = useState<Record<string, number>>({});
+  const balances = useAccountBalances(accounts);
 
   // Ledger state
   const [ledger, setLedger] = useState<Account | null>(null);
@@ -40,22 +41,6 @@ export default function Accounts() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [filterStart, setFilterStart] = useState('');
   const [filterEnd, setFilterEnd] = useState('');
-
-  // Se recalcula cada vez que `accounts` cambia de referencia — lo cual ya
-  // ocurre tras cada mutación y tras cada refresh automático del store
-  // (navegación, regreso de background), así que los saldos quedan al día
-  // sin lógica adicional de invalidación.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const entries = await Promise.all(accounts.map(async (acc) => {
-        const txs = await db.accounts.transactions(acc.id);
-        return [acc.id, computeAccountFinalBalance(acc, txs)] as const;
-      }));
-      if (!cancelled) setBalances(Object.fromEntries(entries));
-    })();
-    return () => { cancelled = true; };
-  }, [accounts]);
 
   function openForm(acc?: Account) {
     if (acc) {
@@ -283,19 +268,25 @@ export default function Accounts() {
         {accounts.map(acc => (
           <Card key={acc.id} padding="sm" className="cursor-pointer hover:border-surface-light transition-colors" onClick={() => openLedger(acc)}>
             <div className="flex items-start justify-between mb-3">
-              <div className="flex-1 min-w-0 mr-2">
-                <p className="font-semibold text-text truncate">{acc.name}</p>
-                <p className="text-xs text-text-muted mt-0.5">{acc.currency} · {acc.type === 'asset' ? 'Activo' : 'Pasivo'}</p>
+              <div className="w-9 h-9 rounded-lg bg-surface-elevated flex items-center justify-center text-secondary shrink-0">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75"><path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
               </div>
-              <div className="flex gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                <Button size="icon" variant="ghost" onClick={() => openForm(acc)}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                </Button>
-                <Button size="icon" variant="danger" onClick={() => handleDelete(acc.id)}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
-                </Button>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${acc.type === 'liability' ? 'bg-primary/15 text-primary' : 'bg-secondary/15 text-secondary'}`}>
+                  {acc.type === 'asset' ? 'Activo' : 'Pasivo'}
+                </span>
+                <div className="flex gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                  <Button size="icon" variant="ghost" onClick={() => openForm(acc)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                  </Button>
+                  <Button size="icon" variant="danger" onClick={() => handleDelete(acc.id)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /></svg>
+                  </Button>
+                </div>
               </div>
             </div>
+            <p className="font-semibold text-text truncate">{acc.name}</p>
+            <p className="text-xs text-text-muted mt-0.5 mb-2">{acc.currency}</p>
             <p className={`text-xl font-bold ${acc.type === 'liability' ? 'text-danger' : 'text-text'}`}>
               {formatCurrency(balances[acc.id] ?? parseFloat(String(acc.current_balance)), acc.currency)}
             </p>

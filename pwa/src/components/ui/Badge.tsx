@@ -9,11 +9,11 @@ interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 const variants: Record<Variant, string> = {
-  income: 'bg-primary/10 text-primary border border-primary/20',
+  income: 'bg-secondary/10 text-secondary border border-secondary/20',
   expense: 'bg-danger/10 text-danger border border-danger/20',
   transfer: 'bg-transfer/10 text-transfer border border-transfer/20',
   warning: 'bg-warning/10 text-warning border border-warning/20',
-  primary: 'bg-primary/10 text-primary border border-primary/20',
+  primary: 'bg-secondary/10 text-secondary border border-secondary/20',
   default: 'bg-surface-light text-text-muted border border-surface-light',
 };
 
